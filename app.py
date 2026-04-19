@@ -141,11 +141,21 @@ def get_all_watchlists():
     return sorted([f.replace(".txt", "") for f in os.listdir(WATCHLIST_DIR) if f.endswith(".txt")])
 
 def load_watchlist(name):
-    path = os.path.join(WATCHLIST_DIR, f"{name}.txt")
-    return open(path, "r").read() if os.path.exists(path) else ""
+    # On utilise os.path.join pour pointer vers le bon dossier
+    filepath = os.path.join(WATCHLIST_DIR, f"{name}.txt")
+    if os.path.exists(filepath):
+        # L'encodage utf-8 est CRUCIAL pour le serveur Linux
+        with open(filepath, "r", encoding="utf-8") as f:
+            return f.read()
+    return ""
 
-def save_watchlist(name, text):
-    with open(os.path.join(WATCHLIST_DIR, f"{name}.txt"), "w") as f: f.write(text)
+def save_watchlist(name, content):
+    if not os.path.exists(WATCHLIST_DIR):
+        os.makedirs(WATCHLIST_DIR)
+    filepath = os.path.join(WATCHLIST_DIR, f"{name}.txt")
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.write(content)
+    st.success(f"✅ Liste '{name}' sauvegardée !")
 
 def load_columns(all_cols):
     if os.path.exists(COLUMNS_FILE):
@@ -200,11 +210,12 @@ if t_list:
             st.download_button("📥 Télécharger CSV", data=csv, file_name=f"Watchlist_{sel_list}.csv")
 
         def style_df(df):
-            styles = pd.DataFrame('', index=df.index, columns=df.columns)
+            styles = pd.DataFrame('background-color: white; color: black;', 
+                          index=df.index, columns=df.columns)
             
             # --- COLORATION DES CASES ---
             if 'Prix Actuel' in df.columns:
-                p_actuel = df['Prix Actuel']
+                p_actuel = pd.to_numeric(df['Prix Actuel'], errors='coerce').fillna(0)
                 
                 # Entrées individuelles (Vert si > Prix)
                 for col in [ 'Entrée FCF -15%', 'Entrée BNA -15%','Entrée Analystes -15%']:
