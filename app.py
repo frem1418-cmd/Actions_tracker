@@ -142,10 +142,17 @@ def get_all_watchlists():
 
 def load_watchlist(name):
     path = os.path.join(WATCHLIST_DIR, f"{name}.txt")
-    return open(path, "r").read() if os.path.exists(path) else ""
+    if os.path.exists(path):
+        with open(path, "r", encoding="utf-8") as f:
+            return f.read()
+    return ""
 
-def save_watchlist(name, text):
-    with open(os.path.join(WATCHLIST_DIR, f"{name}.txt"), "w") as f: f.write(text)
+def save_watchlist(name, content):
+    # On s'assure d'utiliser le dossier des watchlists
+    filepath = os.path.join(WATCHLIST_DIR, f"{name}.txt")
+    with open(filepath, "w", encoding="utf-8") as f:
+        f.write(content)
+    st.success(f"✅ Liste '{name}' sauvegardée !")
 
 def load_columns(all_cols):
     if os.path.exists("selected_columns.txt"):
@@ -188,8 +195,10 @@ with st.sidebar:
     cols_all = ["Nom", "Secteur", "Prix Actuel", "BNA Actuel", "PER Actuel", "BNA Forward", "PER Forward", "Nb Analystes", 
                 "Entrée BNA -15%", "Entrée FCF -15%", "Entrée Analystes -15%", "Entrée Synthèse (-15%)", "Santé (Piotroski)", "Dividende (€/$)", "Rendement %", "Date Détachement", "Avis Analystes"]
     sel_cols = st.multiselect("Colonnes :", cols_all, default=load_columns(cols_all))
-    if st.button("💾 Sauver Colonnes"): 
-        with open(COLUMNS_FILE, "w") as f: f.write(",".join(sel_cols))
+    if st.button("💾 Sauver Colonnes"):
+        with open(COLUMNS_FILE, "w", encoding="utf-8") as f:
+            f.write(",".join(sel_cols))
+        st.success("Configuration des colonnes sauvegardée !")
 
 st.title(f"📈 {sel_list}")
 t_list = [t.strip() for t in tickers_input.split(",") if t.strip()]
