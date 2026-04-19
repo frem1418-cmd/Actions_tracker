@@ -9,11 +9,13 @@ from datetime import datetime
 WATCHLIST_DIR = "watchlists"
 COLUMNS_FILE = "columns_config.txt"
 
-for d in [WATCHLIST_DIR]:
-    if not os.path.exists(d): os.makedirs(d)
+# Création propre du dossier
+if not os.path.exists(WATCHLIST_DIR):
+    os.makedirs(WATCHLIST_DIR)
 
-if not os.listdir(WATCHLIST_DIR):
-    with open(os.path.join(WATCHLIST_DIR, "Portefeuille Principal.txt"), "w") as f:
+# Création du fichier par défaut uniquement s'il n'y a RIEN du tout
+if not os.path.exists(os.path.join(WATCHLIST_DIR, "Portefeuille Principal.txt")):
+    with open(os.path.join(WATCHLIST_DIR, "Portefeuille Principal.txt"), "w", encoding="utf-8") as f:
         f.write("SAN.PA, AI.PA, TTE.PA, AAPL, MSFT")
 
 # --- 2. RÉFÉRENTIELS ---
