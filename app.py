@@ -205,10 +205,15 @@ with st.sidebar:
 st.title(f"📈 {sel_list}")
 # Cette ligne est "blindée" contre les espaces, les sauts de ligne et les minuscules
 t_list = [t.strip().upper() for t in tickers_input.replace('\r', '').replace('\n', ',').split(',') if t.strip()]
-st.write(f"DEBUG - Texte brut : `{tickers_input}`")
-st.write(f"DEBUG - Liste traitée : {t_list}")
+
 if t_list:
-    data_res = [fetch_stock_data(t) for t in t_list if fetch_stock_data(t)]
+# REMPLACEMENT DES LIGNES 211-213
+    data_res = []
+    for t in t_list:
+        res = fetch_stock_data(t)
+        if res:
+            data_res.append(res)
+    
     if data_res:
         df = pd.DataFrame(data_res)
         
