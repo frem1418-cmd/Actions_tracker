@@ -397,7 +397,6 @@ if t_list:
                             m2.metric("-10%", clean_num(val*0.9))
                             m3.metric("-12%", clean_num(val*0.88))
                             m4.metric("-15%", clean_num(val*0.85))
-
             with c2:
                 st.metric("Prix Actuel", f"{clean_num(d['Prix Actuel'])} {fd['currency']}")
                 st.markdown(f"<div style='background:#28a745; color:white; padding:25px; border-radius:15px; text-align:center;'><small>ENTRÉE CONSEILLÉE (-15%)</small><br/><span style='font-size:36px; font-weight:bold;'>{clean_num(fd['fair_avg']*0.85)}</span></div>", unsafe_allow_html=True)
@@ -406,25 +405,27 @@ if t_list:
                 st.write(f"**Détachement :** {d['Date Détachement']}")
                 st.write(f"**Avis :** {d['Avis Analystes']} | **Secteur :** {d['Secteur']}")
 
-            # --- AJOUT DES NEWS ---
+            # --- BLOC NEWS SÉCURISÉ ---
             st.divider()
-            st.subheader(f"📰 Dernières Actualités")
+            st.subheader("📰 Dernières Actualités")
             
             try:
-                # On récupère l'objet ticker via yfinance (déjà dispo dans ton code normalement)
-                ticker_obj = yf.Ticker(d['Ticker'])
-                news_list = ticker_obj.news
-                
-                if news_list:
-                    # On crée 2 colonnes pour afficher les news de façon élégante
-                    for n in news_list[:6]: # Affiche les 6 dernières news
-                        with st.expander(f"🔹 {n['title']}"):
-                            st.write(f"**Source:** {n['publisher']}")
-                            # Conversion de la date
-                            date_pub = datetime.fromtimestamp(n['providerPublishTime']).strftime('%d/%m/%Y %H:%M')
-                            st.write(f"**Date:** {date_pub}")
-                            st.link_button("Lire l'article complet", n['link'])
-                else:
-                    st.info("Aucune actualité récente trouvée pour ce titre.")
+                ticker_pour_news = d.get('Ticker') # On utilise .get pour éviter l'erreur
+                if ticker_pour_news:
+                    t_obj = yf.Ticker(ticker_pour_news)
+                    news_list = t_obj.news
+                    
+                    if news_list:
+                        for n in news_list[:6]:
+                            with st.expander(f"🔹 {n['title']}"):
+                                st.write(f"**Source:** {n['publisher']}")
+                                # Sécurité sur la date
+                                ts = n.get('providerPublishTime')
+                                if ts:
+                                    date_str = datetime.fromtimestamp(ts).strftime('%d/%m/%Y %H:%M')
+                                    st.write(f"**Date :** {date_str}")
+                                st.link_button("Lire l'article", n['link'])
+                    else:
+                        st.info("Aucune actualité trouvée.")
             except Exception as e:
-                st.error(f"Impossible de charger les news : {e}")
+                st.warning(f"Note : Les news ne sont pas disponibles pour le moment.")
