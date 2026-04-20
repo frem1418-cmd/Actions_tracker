@@ -172,10 +172,27 @@ def load_columns(all_cols):
 
 # --- 5. INTERFACE ---
 st.set_page_config(page_title="Expert Bourse Pro+", layout="wide")
-st.markdown("<style>.block-container {padding-top: 1rem;} [data-testid='stTable'] {font-size: 13px;}</style>", unsafe_allow_html=True)
+st.markdown(
+    """
+    <style>
+    /* Réduit l'espace blanc en haut de la page et de la sidebar */
+    .block-container {padding-top: 1rem;}
+    [data-testid="stSidebarNav"] {padding-top: 0rem;}
+    [data-testid="stSidebarContent"] > div:first-child {padding-top: 1rem;}
+    
+    /* Police du tableau */
+    [data-testid='stTable'] {font-size: 13px;}
+    
+    /* Resserre l'espace entre les éléments de la sidebar */
+    .stVerticalBlock {gap: 0.5rem;}
+    </style>
+    """,
+    unsafe_allow_html=True
+)
 
 with st.sidebar:
-    if st.sidebar.button("🔄 Forcer l'actualisation"):
+    # Ton bouton actuel à la ligne 178
+    if st.button("🔄 Forcer l'actualisation", use_container_width=True, size="small"):
         st.cache_data.clear()
         st.rerun()
 
