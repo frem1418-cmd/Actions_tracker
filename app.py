@@ -479,7 +479,7 @@ if t_list:
                         ticker_action = d.get('Ticker', '')
                         fig.update_layout(
                             title={
-                                'text': f"📈 {nom_action} ({ticker_action}) - Performance & Volumes",
+                                'text': f" {nom_action} ({ticker_action})",
                                 'y': 0.95,
                                 'x': 0.5,
                                 'xanchor': 'center',
