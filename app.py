@@ -203,7 +203,7 @@ def load_columns(all_cols):
                 return [c for c in saved if c in all_cols]
         except Exception:
             # Si le fichier est illisible, on ne plante pas, on renvoie les défauts
-            default_cols = ["Nom", "Secteur", "Prix Actuel", "Entrée Synthèse (-15%)", "Entrée BNA -15%", "Entrée FCF -15%", "Entrée Analystes -15%", "Avis Analystes", "Santé (Piotroski)"]
+            default_cols = ["Nom", "Secteur", "Prix Actuel", "Entrée Synthèse (-15%)", "Entrée BNA -15%", "Entrée FCF -15%", "Entrée Analystes -15%", "Avis Analystes", "Nb Analystes" "Santé (Piotroski)"]
             return default_cols
     return ["Nom", "Secteur", "Prix Actuel", "Entrée Synthèse (-15%)", "Avis Analystes"]
 
@@ -314,7 +314,7 @@ with st.sidebar:
     st.divider()   
     cols_all = ["Nom", "Secteur", "Prix Actuel", "BNA Actuel", "PER Actuel", "BNA Forward", "PER Forward", 
                 "Entrée BNA -15%", "Entrée FCF -15%", "Entrée Analystes -15%", "Entrée Synthèse (-15%)", 
-                "Santé (Piotroski)", "Chg 1J", "Chg 1M", "Chg YTD", "Dividende (€/$)", "Rendement %", "Date Détachement", "Avis Analystes"]
+                "Santé (Piotroski)", "Chg 1J", "Chg 1M", "Chg YTD", "Nb Analystes", "Dividende (€/$)", "Rendement %", "Date Détachement", "Avis Analystes"]
 
     # --- 1. On initialise la session_state si elle n'existe pas ---
     if 'selected_columns' not in st.session_state:
@@ -385,7 +385,16 @@ if t_list:
                         if s >= 4: styles.loc[i, 'Santé (Piotroski)'] += 'color: #28a745; font-weight: bold;'
                         elif s <= 1: styles.loc[i, 'Santé (Piotroski)'] += 'color: #dc3545; font-weight: bold;'
                     except: pass
-            
+            # --- COLORATION DES PERFORMANCES ---
+            for col in ['Chg 1J', 'Chg 1M', 'Chg YTD']:
+                if col in df.columns:
+                    # On cherche le signe + ou - dans le texte (car ce sont des strings avec emojis)
+                    mask_plus = df[col].astype(str).str.contains('\+')
+                    mask_moins = df[col].astype(str).str.contains('-')
+                    
+                    # On applique les couleurs (Vert pour +, Rouge pour -)
+                    styles.loc[mask_plus, col] += 'color: #28a745; font-weight: bold;'
+                    styles.loc[mask_moins, col] += 'color: #dc3545; font-weight: bold;'
             return styles
 
         sel = st.dataframe(
