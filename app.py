@@ -176,8 +176,12 @@ st.set_page_config(page_title="Expert Bourse Pro+", layout="wide")
 st.markdown(
     """
     <style>
-    /* Réduit l'espace blanc en haut de la page et de la sidebar */
-    .block-container {padding-top: 1rem;}
+    /* On laisse un peu plus de place en haut du contenu principal pour le titre */
+    .block-container {
+        padding-top: 3.5rem !important;
+    }
+    
+    /* Mais on garde la barre latérale bien haute */
     [data-testid="stSidebarNav"] {padding-top: 0rem;}
     [data-testid="stSidebarContent"] > div:first-child {padding-top: 1rem;}
     
