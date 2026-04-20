@@ -214,17 +214,29 @@ with st.sidebar:
 
     # Logique de Suppression
     if show_del:
-        st.warning("⚠️ Attention : action irréversible")
-        list_to_del = st.selectbox("Liste à supprimer :", lists, key="del_select")
-        if st.button(f"Supprimer {list_to_del}", type="primary", use_container_width=True):
+        st.warning(f"⚠️ Action irréversible")
+        list_to_del = st.selectbox("Choisir la liste à supprimer :", lists, key="del_select_box")
+        
+        # On ajoute une clé unique au bouton de suppression
+        if st.button(f"Confirmer la suppression de {list_to_del}", type="primary", key="btn_confirm_del"):
             if len(lists) > 1:
-                filepath = os.path.join(WATCHLIST_DIR, f"{list_to_del}.txt")
+                # Utilise bien le nom du dossier défini en haut de ton script
+                filepath = os.path.join("watchlists", f"{list_to_del}.txt")
+                
                 if os.path.exists(filepath):
-                    os.remove(filepath)
-                    st.success("Supprimé !")
-                    st.rerun()
+                    try:
+                        os.remove(filepath)
+                        st.success(f"🔥 Liste '{list_to_del}' supprimée avec succès !")
+                        # Pause d'une demi-seconde pour laisser l'utilisateur voir le message
+                        import time
+                        time.sleep(0.5)
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Erreur lors de la suppression : {e}")
+                else:
+                    st.error(f"Fichier introuvable : {filepath}")
             else:
-                st.error("Dernière liste protégée !")
+                st.error("🚫 Impossible de supprimer la dernière liste !")
 
     st.divider()
     # --- ÉTAPE B : ÉDITER & SAUVEGARDER (Ton code actuel) ---
