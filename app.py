@@ -191,11 +191,17 @@ with st.sidebar:
     lists = get_all_watchlists()
     sel_list = st.selectbox("Liste active :", lists, key='sel_list')
     # --- ÉTAPE A : CRÉER (Pour ajouter un nouveau fichier) ---
-    new_name = st.text_input("➕ Créer une nouvelle liste :")
-    if st.button("Créer"):
-        if new_name:
-            save_watchlist(new_name, "AAPL") # Crée le fichier
-            st.rerun()
+    if st.checkbox("➕ Créer une nouvelle liste"):
+        # Ce bloc n'apparaît que si la case est cochée
+        with st.container():
+            new_name = st.text_input("Nom de la nouvelle liste :", placeholder="Ex: Dividendes_2024")
+            if st.button("Confirmer la création"):
+                if new_name:
+                    save_watchlist(new_name, "AAPL") # On initialise avec AAPL par défaut
+                    st.success(f"Liste '{new_name}' créée !")
+                    st.rerun()
+                else:
+                    st.error("Le nom ne peut pas être vide.")
 
     st.divider()
     # --- ÉTAPE B : ÉDITER & SAUVEGARDER (Ton code actuel) ---
