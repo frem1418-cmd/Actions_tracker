@@ -13,10 +13,12 @@ COLUMNS_FILE = "columns_config.txt"
 if not os.path.exists(WATCHLIST_DIR):
     os.makedirs(WATCHLIST_DIR)
 
-# Création du fichier par défaut uniquement s'il n'y a RIEN du tout
-if not os.path.exists(os.path.join(WATCHLIST_DIR, "Portefeuille Principal.txt")):
-    with open(os.path.join(WATCHLIST_DIR, "Portefeuille Principal.txt"), "w", encoding="utf-8") as f:
-        f.write("SAN.PA, AI.PA, TTE.PA, AAPL, MSFT")
+# On ne crée rien automatiquement, ou alors on crée un fichier "Ma Liste.txt" 
+# seulement si le dossier est TOTALEMENT absent (pas seulement vide)
+if not os.path.exists(WATCHLIST_DIR):
+    os.makedirs(WATCHLIST_DIR)
+    with open(os.path.join(WATCHLIST_DIR, "Ma Liste.txt"), "w", encoding="utf-8") as f:
+        f.write("AAPL")
 
 # --- 2. RÉFÉRENTIELS ---
 SECTORS_FR = {
