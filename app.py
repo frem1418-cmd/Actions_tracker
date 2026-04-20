@@ -190,18 +190,43 @@ with st.sidebar:
     st.header("🗂️ Portefeuilles")
     lists = get_all_watchlists()
     sel_list = st.selectbox("Liste active :", lists, key='sel_list')
-    # --- ÉTAPE A : CRÉER (Pour ajouter un nouveau fichier) ---
-    if st.checkbox("➕ Créer une nouvelle liste"):
-        # Ce bloc n'apparaît que si la case est cochée
-        with st.container():
-            new_name = st.text_input("Nom de la nouvelle liste :", placeholder="Ex: Dividendes_2024")
-            if st.button("Confirmer la création"):
-                if new_name:
-                    save_watchlist(new_name, "AAPL") # On initialise avec AAPL par défaut
-                    st.success(f"Liste '{new_name}' créée !")
+    # --- ÉTAPE A : CRÉER (Pour ajouter un nouveau fichier) ou supprimer ---
+    st.header("📂 Portefeuilles")
+    lists = get_all_watchlists()
+    sel_list = st.selectbox("Liste active :", lists, key='sel_list')
+
+    # --- OPTIONS DE GESTION (Tiroirs) ---
+    col1, col2 = st.columns(2)
+    with col1:
+        show_add = st.toggle("➕ Créer")
+    with col2:
+        show_del = st.toggle("🗑️ Supprimer")
+
+    # Logique d'Ajout
+    if show_add:
+        st.info("Créer une nouvelle liste")
+        new_name = st.text_input("Nom de la liste :", placeholder="Ex: Dividendes")
+        if st.button("Confirmer Création", use_container_width=True):
+            if new_name:
+                save_watchlist(new_name, "AAPL")
+                st.success(f"'{new_name}' créée !")
+                st.rerun()
+            else:
+                st.error("Nom vide !")
+
+    # Logique de Suppression
+    if show_del:
+        st.warning("⚠️ Attention : action irréversible")
+        list_to_del = st.selectbox("Liste à supprimer :", lists, key="del_select")
+        if st.button(f"Supprimer {list_to_del}", type="primary", use_container_width=True):
+            if len(lists) > 1:
+                filepath = os.path.join(WATCHLIST_DIR, f"{list_to_del}.txt")
+                if os.path.exists(filepath):
+                    os.remove(filepath)
+                    st.success("Supprimé !")
                     st.rerun()
-                else:
-                    st.error("Le nom ne peut pas être vide.")
+            else:
+                st.error("Dernière liste protégée !")
 
     st.divider()
     # --- ÉTAPE B : ÉDITER & SAUVEGARDER (Ton code actuel) ---
