@@ -190,6 +190,18 @@ with st.sidebar:
     st.header("🗂️ Portefeuilles")
     lists = get_all_watchlists()
     sel_list = st.selectbox("Liste active :", lists, key='sel_list')
+    # --- ÉTAPE A : CRÉER (Pour ajouter un nouveau fichier) ---
+    new_name = st.text_input("➕ Créer une nouvelle liste :")
+    if st.button("Créer"):
+        if new_name:
+            save_watchlist(new_name, "AAPL") # Crée le fichier
+            st.rerun()
+
+    st.divider()
+    # --- ÉTAPE B : ÉDITER & SAUVEGARDER (Ton code actuel) ---
+    # On charge le contenu de la liste sélectionnée
+    current_content = load_watchlist(sel_list)
+
     tickers_input = st.text_area("Éditer les tickers :", value=load_watchlist(sel_list), height=100).upper()
     if st.button("💾 Sauver Liste"): save_watchlist(sel_list, tickers_input)
 
