@@ -187,9 +187,7 @@ with st.sidebar:
                 st.rerun()
 
     st.divider()
-    st.header("🗂️ Portefeuilles")
-    lists = get_all_watchlists()
-    sel_list = st.selectbox("Liste active :", lists, key='sel_list')
+    
     # --- ÉTAPE A : CRÉER (Pour ajouter un nouveau fichier) ou supprimer ---
     st.header("📂 Portefeuilles")
     lists = get_all_watchlists()
