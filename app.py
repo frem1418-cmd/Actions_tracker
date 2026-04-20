@@ -4,6 +4,7 @@ import pandas as pd
 import os
 import requests
 from datetime import datetime
+from textblob import TextBlob
 
 # --- 1. CONFIGURATION & DOSSIERS ---
 WATCHLIST_DIR = "watchlists"
@@ -404,3 +405,26 @@ if t_list:
                 st.write(f"**Dividende :** {clean_num(d['Dividende (€/$)'])} {fd['currency']} ({d['Rendement %']}%)")
                 st.write(f"**Détachement :** {d['Date Détachement']}")
                 st.write(f"**Avis :** {d['Avis Analystes']} | **Secteur :** {d['Secteur']}")
+
+            # --- AJOUT DES NEWS ---
+            st.divider()
+            st.subheader(f"📰 Dernières Actualités")
+            
+            try:
+                # On récupère l'objet ticker via yfinance (déjà dispo dans ton code normalement)
+                ticker_obj = yf.Ticker(d['Ticker'])
+                news_list = ticker_obj.news
+                
+                if news_list:
+                    # On crée 2 colonnes pour afficher les news de façon élégante
+                    for n in news_list[:6]: # Affiche les 6 dernières news
+                        with st.expander(f"🔹 {n['title']}"):
+                            st.write(f"**Source:** {n['publisher']}")
+                            # Conversion de la date
+                            date_pub = datetime.fromtimestamp(n['providerPublishTime']).strftime('%d/%m/%Y %H:%M')
+                            st.write(f"**Date:** {date_pub}")
+                            st.link_button("Lire l'article complet", n['link'])
+                else:
+                    st.info("Aucune actualité récente trouvée pour ce titre.")
+            except Exception as e:
+                st.error(f"Impossible de charger les news : {e}")
