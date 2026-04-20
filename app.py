@@ -3,8 +3,11 @@ import yfinance as yf
 import pandas as pd
 import os
 import requests
+import feedparser
 from datetime import datetime
 from textblob import TextBlob
+import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 
 # --- 1. CONFIGURATION & DOSSIERS ---
 WATCHLIST_DIR = "watchlists"
@@ -430,61 +433,64 @@ if t_list:
                 st.subheader(f"📈 Performance & Volumes (YTD)")
                 
                 try:
-                    import plotly.graph_objects as go
-                    from plotly.subplots import make_subplots
-
+                    
+                    
                     s_obj = yf.Ticker(d['Ticker'])
                     current_yr = datetime.now().year
-                    h_data = s_obj.history(start=f"{current_yr}-01-01")
-                    # 1. On recule la date de début de 100 jours pour le calcul
+                    
+                    # Récupération historique pour calcul MA50
                     from datetime import timedelta
                     date_debut_calcul = (datetime(current_yr, 1, 1) - timedelta(days=100)).strftime('%Y-%m-%d')
-                    
-                    # On récupère l'historique large
                     h_data_large = s_obj.history(start=date_debut_calcul)
-                    
+
                     if not h_data_large.empty:
-                        # 2. On calcule la MA50 sur les données larges
                         h_data_large['MA50'] = h_data_large['Close'].rolling(window=50).mean()
-                        
-                        # 3. On filtre pour n'afficher que l'année en cours sur le graphique
                         h_data = h_data_large[h_data_large.index >= f"{current_yr}-01-01"]
-                    
-                   
+
+                        # --- 1. CALCUL COULEUR VOLUME (Vert si hausse, Rouge si baisse) ---
+                        colors = ['#28a745' if row['Close'] >= row['Open'] else '#dc3545' 
+                                for _, row in h_data.iterrows()]
+
                         fig = make_subplots(specs=[[{"secondary_y": True}]])
 
                         # Courbe du prix
-                        fig.add_trace(
-                            go.Scatter(x=h_data.index, y=h_data['Close'], name="Prix", line=dict(color='#28a745', width=2)),
-                            secondary_y=False,
-                        )
+                        fig.add_trace(go.Scatter(x=h_data.index, y=h_data['Close'], name="Prix", line=dict(color='#28a745', width=2)), secondary_y=False)
+                        
+                        # MA50
+                        fig.add_trace(go.Scatter(x=h_data.index, y=h_data['MA50'], name="MA50", line=dict(color='orange', dash='dot')), secondary_y=False)
 
-                        # AJOUT DE LA MA50 (Ligne orange pointillée)
-                        fig.add_trace(
-                            go.Scatter(x=h_data.index, y=h_data['MA50'], name="MA50", line=dict(color='#ff7f0e', width=1.5, dash='dash')),
-                            secondary_y=False,
-                        )
+                        # Volumes colorés
+                        fig.add_trace(go.Bar(x=h_data.index, y=h_data['Volume'], name="Volume", marker_color=colors, opacity=0.3), secondary_y=True)
 
-                        # Histogramme des Volumes (Barres)
-                        fig.add_trace(
-                            go.Bar(x=h_data.index, y=h_data['Volume'], name="Volume", marker_color='rgba(150, 150, 150, 0.3)'),
-                            secondary_y=True,
-                        )
+                        # --- 2. TRACÉ DES LIGNES HORIZONTALES ---
+                        prix_actuel = d['Prix Actuel']
+                        # Ligne Prix Actuel
+                        fig.add_hline(y=prix_actuel, line_dash="dash", line_color="gray", 
+                                    annotation_text=f"Actuel: {prix_actuel}", annotation_position="bottom right")
+                        
+                        # Ligne Zone d'Achat (-15%)
+                        prix_achat = prix_actuel * 0.85
+                        fig.add_hline(y=prix_achat, line_dash="dot", line_color="#28a745", 
+                                    annotation_text="Zone d'achat (-15%)", annotation_position="top left")
 
                         # Mise en forme
-                        fig.update_layout(
-                            height=400,
-                            margin=dict(l=0, r=0, t=0, b=0),
-                            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                            hovermode="x unified",
-                            template="plotly_white" # ou "plotly_dark" si ton app est sombre
-                        )
-                        
-                        # Cacher la grille du volume pour plus de clarté
-                        fig.update_yaxes(title_text="Prix", secondary_y=False)
-                        fig.update_yaxes(title_text="Volume", secondary_y=True, showgrid=False, range=[0, h_data['Volume'].max() * 4])
+                        fig.update_layout(height=450, margin=dict(l=0, r=0, t=30, b=0), hovermode="x unified", template="plotly_white")
+                        fig.update_yaxes(title_text="Prix", secondary_y=False, showgrid=True, gridcolor='lightgray', fixedrange=False)
+                        fig.update_yaxes(title_text="Volume", secondary_y=True, showgrid=False, fixedrange=False)
 
-                        st.plotly_chart(fig, use_container_width=True)
+                        st.plotly_chart(fig, use_container_width=True,
+                                        config={
+                                            'scrollZoom': True,        # Active la roulette
+                                            'displayModeBar': True, 
+                                            'editable': True,  # Affiche la barre d'outils en haut à droite
+                                            'modeBarButtonsToAdd': [
+                                                'drawline',     # Tracer des lignes droites
+                                                'drawrect',     # Tracer des zones (rectangles)
+                                                'eraseshape'    # Gomme pour effacer tes tracés
+                                            ],
+                                            'displaylogo': False       # Enlève le logo Plotly
+                                            }
+                        )
                     else:
                         st.info("Données non disponibles.")
                 except Exception as e:
@@ -517,24 +523,42 @@ if t_list:
                 # --- BLOC NEWS SÉCURISÉ ---
                 st.divider()
                 st.subheader("📰 Dernières Actualités")
+
+                all_news = []
+                ticker_brut = d.get('Ticker', 'AAPL')
+                ticker_clean = ticker_brut.split('.')[0]
+
+                # --- 1. Récupération Google News (FR) ---
                 
                 try:
-                    ticker_pour_news = d.get('Ticker') # On utilise .get pour éviter l'erreur
-                    if ticker_pour_news:
-                        t_obj = yf.Ticker(ticker_pour_news)
-                        news_list = t_obj.news
-                        
-                        if news_list:
-                            for n in news_list[:6]:
-                                with st.expander(f"🔹 {n['title']}"):
-                                    st.write(f"**Source:** {n['publisher']}")
-                                    # Sécurité sur la date
-                                    ts = n.get('providerPublishTime')
-                                    if ts:
-                                        date_str = datetime.fromtimestamp(ts).strftime('%d/%m/%Y %H:%M')
-                                        st.write(f"**Date :** {date_str}")
-                                    st.link_button("Lire l'article", n['link'])
-                        else:
-                            st.info("Aucune actualité trouvée.")
-                except Exception as e:
-                    st.warning(f"Note : Les news ne sont pas disponibles pour le moment.")
+                    
+                    # 2. Construction de l'URL Google News (recherche sur 7 jours en français)
+                    url_fr = f"https://news.google.com/rss/search?q={ticker_clean}+bourse+when:7d&hl=fr&gl=FR&ceid=FR:fr"
+                    
+                    # 3. Lecture du flux avec feedparser
+                    feed = feedparser.parse(url_fr)
+                    
+                    for entry in feed.entries:
+                        # On crée un objet datetime pour pouvoir trier
+                        dt_obj = datetime(*entry.published_parsed[:6])
+                        all_news.append({
+                            'timestamp': dt_obj,
+                            'date_visuelle': dt_obj.strftime('%d/%m'),
+                            'titre': entry.title,
+                            'source': f"🇫🇷 {entry.source.get('title', 'Google')}",
+                            'lien': entry.link,
+                        })
+                except: pass
+              
+                # --- 3. Affichage ---
+                if all_news:
+                    # Optionnel : trier par date ici si besoin, 
+                    all_news.sort(key=lambda x: x['timestamp'], reverse=True)
+                    for article in all_news[:12]: # On affiche les 8 meilleurs résultats fusionnés
+                        label = f"📅 **{article['date_visuelle']}** | {article['titre']}"
+                        with st.expander(label):
+                            st.write(f"**Source :** {article['source']}")
+                            st.caption(f"Heure de publication : {article['timestamp'].strftime('%H:%M')}")
+                            st.link_button("Lire l'article", article['lien'])
+                else:
+                    st.info(f"ℹ️ Aucune actualité récente disponible pour {ticker_clean}.")

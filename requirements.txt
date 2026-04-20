@@ -4,3 +4,5 @@ pandas
 requests
 textblob
 plotly
+feedparser
+Plaintext

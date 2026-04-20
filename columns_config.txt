@@ -1,0 +1,1 @@
+Nom,Secteur,Prix Actuel,Chg 1J,Chg YTD,Entrée Synthèse (-15%),Entrée BNA -15%,Entrée FCF -15%,Entrée Analystes -15%,Santé (Piotroski),Avis Analystes,Nb Analystes
