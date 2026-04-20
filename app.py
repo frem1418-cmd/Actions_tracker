@@ -474,7 +474,19 @@ if t_list:
                                     annotation_text="Zone d'achat (-15%)", annotation_position="top left")
 
                         # Mise en forme
-                        fig.update_layout(height=450, margin=dict(l=0, r=0, t=30, b=0), hovermode="x unified", template="plotly_white")
+                        # On récupère le nom et le ticker pour le titre
+                        nom_action = d.get('Nom', 'Action')
+                        ticker_action = d.get('Ticker', '')
+                        fig.update_layout(
+                            title={
+                                'text': f"📈 {nom_action} ({ticker_action}) - Performance & Volumes",
+                                'y': 0.95,
+                                'x': 0.5,
+                                'xanchor': 'center',
+                                'yanchor': 'top',
+                                'font': {'size': 20}
+                            },
+                            height=450, margin=dict(l=0, r=0, t=30, b=0), hovermode="x unified", template="plotly_white")
                         fig.update_yaxes(title_text="Prix", secondary_y=False, showgrid=True, gridcolor='lightgray', fixedrange=False)
                         fig.update_yaxes(title_text="Volume", secondary_y=True, showgrid=False, fixedrange=False)
 
