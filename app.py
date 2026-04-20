@@ -167,8 +167,8 @@ def load_columns(all_cols):
                 return [c for c in saved if c in all_cols]
         except Exception:
             # Si le fichier est illisible, on ne plante pas, on renvoie les défauts
-            return all_cols[cols_all = ["Nom", "Secteur", "Prix Actuel", "Entrée Synthèse (-15%)", "Entrée BNA -15%", "Entrée FCF -15%", "Entrée Analystes -15%",  "Avis Analystes", "Santé (Piotroski)"]]
-    return all_cols[:5]
+            return all_cols[cols_all = ["Nom", "Secteur", "Prix Actuel", "Entrée Synthèse (-15%)", "Entrée BNA -15%", "Entrée FCF -15%", "Entrée Analystes -15%",  "Avis Analystes", "Santé (Piotroski)"]
+    return all_cols["Nom", "Secteur", "Prix Actuel", "Entrée Synthèse (-15%)", "Avis Analystes"]
 
 # --- 5. INTERFACE ---
 st.set_page_config(page_title="Expert Bourse Pro+", layout="wide")
