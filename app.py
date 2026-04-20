@@ -175,6 +175,11 @@ st.set_page_config(page_title="Expert Bourse Pro+", layout="wide")
 st.markdown("<style>.block-container {padding-top: 1rem;} [data-testid='stTable'] {font-size: 13px;}</style>", unsafe_allow_html=True)
 
 with st.sidebar:
+    if st.sidebar.button("🔄 Forcer l'actualisation"):
+        st.cache_data.clear()
+        st.rerun()
+
+    st.divider()
     st.header("🔍 Recherche d'Action")
     sq = st.text_input("Nom de la société (ex: LVMH)")
     if sq:
