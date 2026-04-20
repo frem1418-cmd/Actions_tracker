@@ -192,7 +192,7 @@ st.markdown(
 
 with st.sidebar:
     # Ton bouton actuel à la ligne 178
-    if st.button("🔄 Forcer l'actualisation", use_container_width=True, size="small"):
+    if st.button("🔄 Forcer l'actualisation", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
 
