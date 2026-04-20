@@ -159,15 +159,15 @@ def save_watchlist(name, content):
     st.success(f"✅ Liste '{name}' sauvegardée !")
 
 def load_columns(all_cols):
-    if os.path.exists("selected_columns.txt"):
+    if os.path.exists(COLUMNS_FILE):
         try:
             # On force l'encodage ET on gère les erreurs de lecture
-            with open("selected_columns.txt", "r", encoding="utf-8") as f:
+            with open(COLUMNS_FILE, "r", encoding="utf-8") as f:
                 saved = f.read().split(",")
                 return [c for c in saved if c in all_cols]
         except Exception:
             # Si le fichier est illisible, on ne plante pas, on renvoie les défauts
-            return all_cols[:5]
+            return all_cols[cols_all = ["Nom", "Secteur", "Prix Actuel", "Entrée Synthèse (-15%)", "Entrée BNA -15%", "Entrée FCF -15%", "Entrée Analystes -15%",  "Avis Analystes", "Santé (Piotroski)"]]
     return all_cols[:5]
 
 # --- 5. INTERFACE ---
@@ -270,14 +270,30 @@ with st.sidebar:
     tickers_input = st.text_area("Éditer les tickers :", value=load_watchlist(sel_list), height=100).upper()
     if st.button("💾 Sauver Liste"): save_watchlist(sel_list, tickers_input)
 
-    st.divider()
-    cols_all = ["Nom", "Secteur", "Prix Actuel", "BNA Actuel", "PER Actuel", "BNA Forward", "PER Forward", "Nb Analystes", 
-                "Entrée BNA -15%", "Entrée FCF -15%", "Entrée Analystes -15%", "Entrée Synthèse (-15%)", "Santé (Piotroski)", "Dividende (€/$)", "Rendement %", "Date Détachement", "Avis Analystes"]
-    sel_cols = st.multiselect("Colonnes :", cols_all, default=load_columns(cols_all))
+    st.divider()   
+    cols_all = ["Nom", "Secteur", "Prix Actuel", "BNA Actuel", "PER Actuel", "BNA Forward", "PER Forward", 
+                "Entrée BNA -15%", "Entrée FCF -15%", "Entrée Analystes -15%", "Entrée Synthèse (-15%)", 
+                "Santé (Piotroski)", "Dividende (€/$)", "Rendement %", "Date Détachement", "Avis Analystes"]
+
+    # --- 1. On initialise la session_state si elle n'existe pas ---
+    if 'selected_columns' not in st.session_state:
+        st.session_state.selected_columns = load_columns(cols_all)
+
+    # --- 2. Le multiselect utilise et met à jour la session_state ---
+    sel_cols = st.multiselect(
+        "Colonnes :", 
+        cols_all, 
+        default=st.session_state.selected_columns,
+        key="my_col_select"
+    )
+
+    # --- 3. Sauvegarde physique et mise à jour de la mémoire ---
     if st.button("💾 Sauver Colonnes"):
         with open(COLUMNS_FILE, "w", encoding="utf-8") as f:
             f.write(",".join(sel_cols))
-        st.success("Configuration des colonnes sauvegardée !")
+        st.session_state.selected_columns = sel_cols # On met à jour la mémoire vive
+        st.success("Configuration sauvegardée !")
+        st.rerun()
 
 st.title(f"📈 {sel_list}")
 # Cette ligne est "blindée" contre les espaces, les sauts de ligne et les minuscules
