@@ -124,6 +124,37 @@ def fetch_stock_data(ticker_str):
         mods = [v for v in [vb, vf, tm] if v > 0]
         avg = sum(mods)/len(mods) if mods else 0
         p_s, p_d = calculate_piotroski_advanced(s)
+       # 1. On récupère d'abord l'historique YTD (qui contient aussi le mois et la veille)
+        current_year = datetime.now().year
+        hist = s.history(start=f"{current_year}-01-01")
+        
+        perf_1j, perf_1m, perf_ytd = 0, 0, 0
+        
+        if len(hist) >= 2:
+            c_actuel = p
+            # Calcul 1 jour
+            c_veille = hist['Close'].iloc[-2]
+            perf_1j = ((c_actuel - c_veille) / c_veille) * 100
+            
+            # Calcul YTD (début d'année)
+            c_debut_annee = hist['Close'].iloc[0]
+            perf_ytd = ((c_actuel - c_debut_annee) / c_debut_annee) * 100
+            
+            # Calcul 1 mois (si on a au moins 20 jours de bourse)
+            if len(hist) >= 20:
+                c_debut_mois = hist['Close'].iloc[-20]
+                perf_1m = ((c_actuel - c_debut_mois) / c_debut_mois) * 100
+            else:
+                # Si l'année vient de commencer (ex: en janvier), 1M = YTD
+                perf_1m = perf_ytd
+
+        # 2. Une seule fonction de formatage
+        def fmt_p(v):
+            return f"{'📈' if v > 0 else '📉'} {v:+.2f}%"
+            
+        # 3. Extraction de la devise (indispensable pour ton PDF et tes metrics)
+        curr_raw = info.get('currency', 'EUR')
+        sym = "$" if curr_raw == "USD" else "£" if curr_raw == "GBP" else "€"
         
         div_date = info.get("exDividendDate")
         div_date_str = datetime.fromtimestamp(div_date).strftime('%d/%m/%Y') if div_date else "N/A"
@@ -132,6 +163,10 @@ def fetch_stock_data(ticker_str):
             "Ticker": ticker_str, "Nom": info.get("longName", ticker_str),
             "Secteur": SECTORS_FR.get(info.get("sector"), info.get("sector")),
             "Prix Actuel": p, "BNA Actuel": info.get("trailingEps", 0), "PER Actuel": info.get("trailingPE", 0),
+            "Chg 1J": fmt_p(perf_1j),
+            "Chg YTD": fmt_p(perf_ytd),
+            "Chg 1M": fmt_p(perf_1m),
+            "currency": sym,
             "BNA Forward": ef, "PER Forward": pf, "Nb Analystes": info.get("numberOfAnalystOpinions", 0),
             "Entrée BNA -15%": vb * 0.85, "Entrée FCF -15%": vf * 0.85, "Entrée Analystes -15%": tm * 0.85,
             "Entrée Synthèse (-15%)": avg * 0.85, "Santé (Piotroski)": p_s, "p_details": p_d,
@@ -279,7 +314,7 @@ with st.sidebar:
     st.divider()   
     cols_all = ["Nom", "Secteur", "Prix Actuel", "BNA Actuel", "PER Actuel", "BNA Forward", "PER Forward", 
                 "Entrée BNA -15%", "Entrée FCF -15%", "Entrée Analystes -15%", "Entrée Synthèse (-15%)", 
-                "Santé (Piotroski)", "Dividende (€/$)", "Rendement %", "Date Détachement", "Avis Analystes"]
+                "Santé (Piotroski)", "Chg 1J", "Chg 1M", "Chg YTD", "Dividende (€/$)", "Rendement %", "Date Détachement", "Avis Analystes"]
 
     # --- 1. On initialise la session_state si elle n'existe pas ---
     if 'selected_columns' not in st.session_state:
@@ -380,6 +415,71 @@ if t_list:
                             <div style='font-size:1.4em;'>{'✅' if info.get('status') else '❌'}</div>
                         </div>
                         """, unsafe_allow_html=True)
+                # --- SECTION GRAPHIQUE ---
+                # --- SECTION GRAPHIQUE AVANCÉ (PRIX + VOLUME) ---
+                st.divider()
+                st.subheader(f"📈 Performance & Volumes (YTD)")
+                
+                try:
+                    import plotly.graph_objects as go
+                    from plotly.subplots import make_subplots
+
+                    s_obj = yf.Ticker(d['Ticker'])
+                    current_yr = datetime.now().year
+                    h_data = s_obj.history(start=f"{current_yr}-01-01")
+                    # 1. On recule la date de début de 100 jours pour le calcul
+                    from datetime import timedelta
+                    date_debut_calcul = (datetime(current_yr, 1, 1) - timedelta(days=100)).strftime('%Y-%m-%d')
+                    
+                    # On récupère l'historique large
+                    h_data_large = s_obj.history(start=date_debut_calcul)
+                    
+                    if not h_data_large.empty:
+                        # 2. On calcule la MA50 sur les données larges
+                        h_data_large['MA50'] = h_data_large['Close'].rolling(window=50).mean()
+                        
+                        # 3. On filtre pour n'afficher que l'année en cours sur le graphique
+                        h_data = h_data_large[h_data_large.index >= f"{current_yr}-01-01"]
+                    
+                   
+                        fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+                        # Courbe du prix
+                        fig.add_trace(
+                            go.Scatter(x=h_data.index, y=h_data['Close'], name="Prix", line=dict(color='#28a745', width=2)),
+                            secondary_y=False,
+                        )
+
+                        # AJOUT DE LA MA50 (Ligne orange pointillée)
+                        fig.add_trace(
+                            go.Scatter(x=h_data.index, y=h_data['MA50'], name="MA50", line=dict(color='#ff7f0e', width=1.5, dash='dash')),
+                            secondary_y=False,
+                        )
+
+                        # Histogramme des Volumes (Barres)
+                        fig.add_trace(
+                            go.Bar(x=h_data.index, y=h_data['Volume'], name="Volume", marker_color='rgba(150, 150, 150, 0.3)'),
+                            secondary_y=True,
+                        )
+
+                        # Mise en forme
+                        fig.update_layout(
+                            height=400,
+                            margin=dict(l=0, r=0, t=0, b=0),
+                            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                            hovermode="x unified",
+                            template="plotly_white" # ou "plotly_dark" si ton app est sombre
+                        )
+                        
+                        # Cacher la grille du volume pour plus de clarté
+                        fig.update_yaxes(title_text="Prix", secondary_y=False)
+                        fig.update_yaxes(title_text="Volume", secondary_y=True, showgrid=False, range=[0, h_data['Volume'].max() * 4])
+
+                        st.plotly_chart(fig, use_container_width=True)
+                    else:
+                        st.info("Données non disponibles.")
+                except Exception as e:
+                    st.error("Installez plotly pour voir ce graphique : pip install plotly")
 
                 st.divider()
                 st.subheader("🏆 Modèles de Valorisation")
