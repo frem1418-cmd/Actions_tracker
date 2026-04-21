@@ -13,15 +13,15 @@ from bs4 import BeautifulSoup
 
 
 #Fonction pour récupérer les news et analyser le sentiment
-def get_quick_news(ticker):
+def get_quick_news(ticker, company_name):
     news_list = []
     t_clean = ticker.split('.')[0].upper()
     
     # --- 1. Google News FR ---
     try:
-        url = f"https://news.google.com/rss/search?q={t_clean}+bourse&hl=fr&gl=FR&ceid=FR:fr"
+        url = f"https://news.google.com/rss/search?q={company_name}+bourse&hl=fr&gl=FR&ceid=FR:fr"
         f = feedparser.parse(url)
-        for e in f.entries[:3]:
+        for e in f.entries[:5]:
             pol = TextBlob(e.title).sentiment.polarity
             icon = "🟢" if pol > 0.1 else "🔴" if pol < -0.1 else "⚪"
             raw_pub = e.published if hasattr(e, 'published') else ""
@@ -478,7 +478,13 @@ if t_list:
             if tickers_input:
                 liste_tickers = [t.strip().upper() for t in tickers_input.split(',') if t.strip()]
                 for t in liste_tickers:
-                    with st.expander(f"**{t}**", expanded=True):
+                    # --- RÉCUPÉRATION DU NOM DE L'ACTION ---
+                    try:
+                        info = yf.Ticker(t).info
+                        nom_action = info.get('longName', t) # On prend longName, sinon le ticker par défaut
+                    except:
+                        nom_action = t
+                    with st.expander(f"🏢 **{nom_action}** ({t})", expanded=True):
                         articles = get_quick_news(t)
                         if articles:
                             for a in articles:
