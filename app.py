@@ -407,10 +407,10 @@ with st.sidebar:
     # --- OPTIONS DE GESTION (Tiroirs) ---
     col1, col2 = st.columns(2)
     with col1:
-        show_add = st.toggle("➕ Créer", help="Créer un nouveau portefeuille")
+        show_add = st.toggle("➕ Créer")
     with col2:
         show_del = st.toggle("🗑️", help="Supprimer un portefeuille")
-    col_news1, col_news2 = st.sidebar.columns([1, 4])
+    col_news1, col_news2 = st.sidebar.columns([1, 4], vertical_alignment="center")
     with col_news1:
         show_news_portfolio = st.checkbox("")
     with col_news2:
