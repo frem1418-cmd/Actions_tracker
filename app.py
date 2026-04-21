@@ -24,8 +24,8 @@ def get_quick_news(ticker):
         for e in f.entries[:3]:
             pol = TextBlob(e.title).sentiment.polarity
             icon = "🟢" if pol > 0.1 else "🔴" if pol < -0.1 else "⚪"
-            dt = e.published[5:16] if hasattr(e, 'published') else ""
-            news_list.append({'date': dt, 'titre': e.title, 'lien': e.link, 'badge': f"{icon} 🇫🇷"})
+            dt = e.published[5:22] if hasattr(e, 'published') else ""
+            news_list.append({'date': dt, 'titre': e.title, 'lien': e.link, 'badge': f"{icon} 🌐"})
              
     except: pass
 
@@ -59,7 +59,7 @@ def get_quick_news(ticker):
                         'date': f"{last_date} {tm}",
                         'titre': t_text,
                         'lien': row.a['href'],
-                        'badge': f"{icon} 📊 US"
+                        'badge': f"{icon} 📈"
                     })
     except: pass
     return news_list
