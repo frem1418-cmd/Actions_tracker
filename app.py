@@ -45,18 +45,28 @@ def get_quick_news(ticker):
                 for row in table.findAll('tr')[:5]:
                     tds = row.findAll('td')
                     raw_dt = tds[0].get_text(strip=True)
-                    # Gestion de la date persistante Finviz
+                    
                     if " " in raw_dt:
-                        # raw_dt: "Apr-20-26 10:08PM" -> last_date: "Apr-20"
-                        last_date = raw_dt.split(' ')[0][:-3] 
-                        tm = raw_dt.split(' ')[1]
+                        # On sépare la date de l'heure
+                        date_part = raw_dt.split(' ')[0] # ex: Today ou Apr-20-26
+                        time_part = raw_dt.split(' ')[1] # ex: 05:00AM
+                        
+                        # Si c'est une date formatée (pas Today), on enlève l'année (-26)
+                        if "-" in date_part:
+                            # "Apr-20-26" -> "Apr-20"
+                            last_date = "-".join(date_part.split("-")[:2])
+                        else:
+                            # Garde "Today" tel quel
+                            last_date = date_part
+                        tm = time_part
                     else:
-                        tm = raw_dt
+                        tm = raw_dt # C'est juste l'heure, on garde la date précédente
                     
                     t_text = row.a.get_text()
                     pol = TextBlob(t_text).sentiment.polarity
                     icon = "🟢" if pol > 0.1 else "🔴" if pol < -0.1 else "⚪"
                     
+                    # Format final harmonisé : Jour-Mois Heure
                     news_list.append({
                         'date': f"{last_date} {tm}",
                         'titre': t_text,
