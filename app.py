@@ -10,6 +10,8 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import requests
 from bs4 import BeautifulSoup
+from streamlit_gsheets import GSheetsConnection
+
 
 
 #Fonction pour récupérer les news et analyser le sentiment
@@ -159,19 +161,20 @@ def news_timeline_module(liste_tickers):
 
 
 # --- 1. CONFIGURATION & DOSSIERS ---
-WATCHLIST_DIR = "watchlists"
-COLUMNS_FILE = "columns_config.txt"
+# --- 1. CONFIGURATION GOOGLE SHEETS ---
+from streamlit_gsheets import GSheetsConnection
 
-# Création propre du dossier
-if not os.path.exists(WATCHLIST_DIR):
-    os.makedirs(WATCHLIST_DIR)
+# On crée la connexion (assure-toi d'avoir configuré les Secrets sur Streamlit Cloud)
+conn = st.connection("gsheets", type=GSheetsConnection)
 
-# On ne crée rien automatiquement, ou alors on crée un fichier "Ma Liste.txt" 
-# seulement si le dossier est TOTALEMENT absent (pas seulement vide)
-if not os.path.exists(WATCHLIST_DIR):
-    os.makedirs(WATCHLIST_DIR)
-    with open(os.path.join(WATCHLIST_DIR, "Ma Liste.txt"), "w", encoding="utf-8") as f:
-        f.write("AAPL")
+def get_all_portfolios():
+    """Récupère toutes les listes depuis Google Sheets"""
+    try:
+        df = conn.read(ttl=0)
+        return df.dropna(subset=['portefeuille_name'])
+    except Exception as e:
+        st.error(f"Erreur de connexion Google Sheets : {e}")
+        return pd.DataFrame(columns=['portefeuille_name', 'tickers'])
 
 # --- 2. RÉFÉRENTIELS ---
 SECTORS_FR = {
@@ -329,24 +332,48 @@ def fetch_stock_data(ticker_str):
         }
     except: return None
 
-# --- 4. GESTION LISTES & COLONNES ---
+# --- 4. GESTION LISTES VIA GOOGLE SHEETS ---
+
 def get_all_watchlists():
-    return sorted([f.replace(".txt", "") for f in os.listdir(WATCHLIST_DIR) if f.endswith(".txt")])
+    """Récupère les noms de tous les portefeuilles (remplace l'ancien os.listdir)"""
+    try:
+        df = conn.read(ttl=0)
+        # On retourne la liste des noms triée
+        return sorted(df['portefeuille_name'].dropna().unique().tolist())
+    except:
+        return []
 
 def load_watchlist(name):
-    path = os.path.join(WATCHLIST_DIR, f"{name}.txt")
-    if os.path.exists(path):
-        with open(path, "r", encoding="utf-8") as f:
-            return f.read()
-    return ""
+    """Récupère les tickers d'un portefeuille spécifique"""
+    try:
+        df = conn.read(ttl=0)
+        # On cherche les tickers correspondant au nom
+        row = df[df['portefeuille_name'] == name]
+        if not row.empty:
+            return row['tickers'].values[0]
+        return ""
+    except:
+        return ""
 
 def save_watchlist(name, content):
-    # On s'assure d'utiliser le dossier des watchlists
-    filepath = os.path.join(WATCHLIST_DIR, f"{name}.txt")
-    with open(filepath, "w", encoding="utf-8") as f:
-        f.write(content)
-    st.success(f"✅ Liste '{name}' sauvegardée !")
-
+    """Sauvegarde les tickers dans Google Sheets"""
+    try:
+        # 1. On récupère l'état actuel de la Sheet
+        df = conn.read(ttl=0)
+        
+        # 2. Si le nom existe, on met à jour, sinon on ajoute
+        if name in df['portefeuille_name'].values:
+            df.loc[df['portefeuille_name'] == name, 'tickers'] = content
+        else:
+            new_row = pd.DataFrame({'portefeuille_name': [name], 'tickers': [content]})
+            df = pd.concat([df, new_row], ignore_index=True)
+        
+        # 3. On pousse la mise à jour vers Google Sheets
+        conn.update(data=df)
+        st.success(f"✅ Liste '{name}' synchronisée sur Google Sheets !")
+    except Exception as e:
+        st.error(f"Erreur lors de la sauvegarde : {e}")
+        
 def load_columns(all_cols):
     if os.path.exists(COLUMNS_FILE):
         try:
