@@ -24,8 +24,9 @@ def get_quick_news(ticker):
         for e in f.entries[:3]:
             pol = TextBlob(e.title).sentiment.polarity
             icon = "🟢" if pol > 0.1 else "🔴" if pol < -0.1 else "⚪"
-            dt = e.published[5:22] if hasattr(e, 'published') else ""
-            news_list.append({'date': dt, 'titre': e.title, 'lien': e.link, 'badge': f"{icon} 🌐"})
+            raw_pub = e.published if hasattr(e, 'published') else ""
+            clean_dt = f"{raw_pub[5:11]} {raw_pub[17:22]}" if raw_pub else ""
+            news_list.append({'date': clean_dt, 'titre': e.title, 'lien': e.link, 'badge': f"{icon} 🌐"})
              
     except: pass
 
@@ -46,7 +47,8 @@ def get_quick_news(ticker):
                     raw_dt = tds[0].get_text(strip=True)
                     # Gestion de la date persistante Finviz
                     if " " in raw_dt:
-                        last_date = raw_dt.split(' ')[0]
+                        # raw_dt: "Apr-20-26 10:08PM" -> last_date: "Apr-20"
+                        last_date = raw_dt.split(' ')[0][:-3] 
                         tm = raw_dt.split(' ')[1]
                     else:
                         tm = raw_dt
