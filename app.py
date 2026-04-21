@@ -462,7 +462,7 @@ with st.sidebar:
 
     with col_news1:
     # On laisse le label vide pour ne pas prendre de place
-        show_news_portfolio = st.checkbox("", value=True, key="chk_news_port")
+        show_news_portfolio = st.checkbox("", value=False, key="chk_news_port")
 
     with col_news2:
     # On colle l'icône et le texte ici
