@@ -560,9 +560,9 @@ if t_list:
                 mode_vue = st.radio("Format d'affichage :", ["⏳ Flux Chronologique" , "🏢 Par Action"], horizontal=True)
                 
                 if mode_vue == "⏳ Flux Chronologique":
-                    news_dashboard_module(liste_tickers)
-                else:
                     news_timeline_module(liste_tickers)
+                else:
+                    news_dashboard_module(liste_tickers)
                     
             else:
                 st.info("La liste de tickers est vide.")
