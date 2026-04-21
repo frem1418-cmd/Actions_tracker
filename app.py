@@ -412,7 +412,7 @@ with st.sidebar:
         show_del = st.toggle("🗑️ Supprimer")
     col_news1, col_news2 = st.sidebar.columns([1, 4])
     with col_news1:
-        show_news_portfolio = st.checkbox("📰 Actualités", help="Afficher les Actualités du portefeuille")
+        show_news_portfolio = st.checkbox("📰 News", help="Afficher les Actualités du portefeuille")
 
 
     # Logique d'Ajout
