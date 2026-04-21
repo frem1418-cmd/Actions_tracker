@@ -93,6 +93,35 @@ def get_quick_news(ticker):
     news_list.sort(key=lambda x: x['dt_obj'], reverse=True)
 
     return news_list
+# ---  FONCTIONS de rafraichissement de news ---
+@st.cache_data(ttl=86400) # Cache le nom 24h
+def get_action_name(ticker):
+    try:
+        return yf.Ticker(ticker).info.get('longName', ticker)
+    except:
+        return ticker
+    
+@st.fragment(run_every="5m") # S'actualise seul toutes les 5 minutes
+def news_dashboard_module(liste_tickers):
+    # Barre d'outils discrète en haut du module
+    col1, col2 = st.columns([0.8, 0.2])
+    with col1:
+        st.subheader("🗞️ Flux d'actualités en direct")
+    with col2:
+        if st.button("🔄 Actualiser"):
+            st.rerun(scope="fragment")
+
+    for t in liste_tickers:
+        nom_action = get_action_name(t)
+        
+        with st.expander(f"🏢 **{nom_action}** ({t})", expanded=True):
+            articles = get_quick_news(t) 
+            if articles:
+                for a in articles:
+                    # Rappel du format : Sentiment/Source | Date 24h | Titre
+                    st.markdown(f"{a['badge']} | **{a['date']}** | [{a['titre']}]({a['lien']})")
+            else:
+                st.caption(f"Aucune actualité récente pour {t}.")    
     
 
 # --- 1. CONFIGURATION & DOSSIERS ---
@@ -131,6 +160,7 @@ EXPLICATIONS = {
     "Qualité Gains": "Vérifie que le Cash Flow > Bénéfice Net. Le symbole Δ (Delta) représente l'écart entre les deux. Si Δ est positif, le profit est soutenu par du cash réel.",
     "Taille Actifs": "Mesure si l'entreprise se développe. Une augmentation des actifs indique généralement une croissance ou des investissements."
 }
+
 
 # --- 3. FONCTIONS DE CALCUL & UTILITAIRES ---
 def search_ticker(query):
@@ -498,23 +528,12 @@ if t_list:
             
             
             if tickers_input:
+                # 1. On prépare la liste à partir de l'input
                 liste_tickers = [t.strip().upper() for t in tickers_input.split(',') if t.strip()]
-                for t in liste_tickers:
-                    # --- RÉCUPÉRATION DU NOM DE L'ACTION ---
-                    try:
-                        info = yf.Ticker(t).info
-                        nom_action = info.get('longName', t) # On prend longName, sinon le ticker par défaut
-                    except:
-                        nom_action = t
-                    with st.expander(f"🏢 **{nom_action}** ({t})", expanded=True):
-                        articles = get_quick_news(t)
-                        if articles:
-                            for a in articles:
-                                # UNE SEULE LIGNE : Badge | Date Heure | Titre
-                                # Pas de divider, pas de write("---")
-                                st.markdown(f"{a['badge']} | **{a['date']}** | [{a['titre']}]({a['lien']})")                    
-                        else:
-                            st.caption("Aucune news trouvée.")
+                
+                # 2. On appelle la fonction "Fragment" qu'on a créée à l'étape 1
+                news_dashboard_module(liste_tickers)
+
             else:
                 st.info("La liste de tickers est vide.")
 
