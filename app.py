@@ -531,9 +531,9 @@ with st.sidebar:
     current_content = load_watchlist_gsheets(sel_list)
 
     tickers_input = st.text_area("Éditer les tickers :", value=current_content, height=100).upper()
-    if st.button("💾 Sauver Liste"): save_watchlist_gsheets(sel_list, tickers_input)
-    st.rerun() # Pour rafraîchir l'affichage immédiatement
-    
+    if st.button("💾 Sauver Liste"): 
+        save_watchlist_gsheets(sel_list, tickers_input)
+        st.rerun() # Pour rafraîchir l'affichage immédiatement
     st.divider()   
     cols_all = ["Nom", "Secteur", "Prix Actuel", "BNA Actuel", "PER Actuel", "BNA Forward", "PER Forward", 
                 "Entrée BNA -15%", "Entrée FCF -15%", "Entrée Analystes -15%", "Entrée Synthèse (-15%)", 
