@@ -122,7 +122,34 @@ def news_dashboard_module(liste_tickers):
                     st.markdown(f"{a['badge']} | **{a['date']}** | [{a['titre']}]({a['lien']})")
             else:
                 st.caption(f"Aucune actualité récente pour {t}.")    
+
+
+# --- Fonction New - Vue Flux ou Timeline- liste chronologique des news ---
+@st.fragment(run_every="5m")
+def news_timeline_module(liste_tickers):
+    all_news = []
     
+    # 1. On collecte toutes les news de tous les tickers
+    for t in liste_tickers:
+        nom = get_action_name(t)
+        articles = get_quick_news(t)
+        for a in articles:
+            # On ajoute le nom de l'action au titre pour savoir de qui on parle
+            a['display_title'] = f"**{t}** : {a['titre']}"
+            all_news.append(a)
+    
+    # 2. On trie tout par date (la plus récente en haut)
+    all_news.sort(key=lambda x: x['dt_obj'], reverse=True)
+    
+    # 3. Affichage
+    st.write("---")
+    if all_news:
+        for a in all_news[:20]: # On affiche les 20 plus récentes
+            st.markdown(f"{a['badge']} | {a['date']} | [{a['display_title']}]({a['lien']})")
+    else:
+        st.info("Aucune news disponible.")    
+
+
 
 # --- 1. CONFIGURATION & DOSSIERS ---
 WATCHLIST_DIR = "watchlists"
@@ -523,20 +550,22 @@ if t_list:
         if show_news_portfolio:
             # 1. MODE REVUE DE PRESSE (S'affiche à la place du tableau)
             st.subheader(f"🗞️ Revue de Presse : {sel_list}")
-            
-            # On récupère les tickers de ta zone de texte (sidebar)
-            
-            
+                        
             if tickers_input:
                 # 1. On prépare la liste à partir de l'input
                 liste_tickers = [t.strip().upper() for t in tickers_input.split(',') if t.strip()]
                 
                 # 2. On appelle la fonction "Fragment" qu'on a créée à l'étape 1
-                news_dashboard_module(liste_tickers)
-
+                # --- SÉLECTEUR DE VUE ---
+                mode_vue = st.radio("Format d'affichage :", ["🏢 Par Action", "⏳ Flux Chronologique"], horizontal=True)
+                
+                if mode_vue == "🏢 Par Action":
+                    news_dashboard_module(liste_tickers)
+                else:
+                    news_timeline_module(liste_tickers)
+                    
             else:
                 st.info("La liste de tickers est vide.")
-
         else:
             sel = st.dataframe(
                 df[["Ticker"] + sel_cols].style.apply(style_df, axis=None).format(formatter=lambda x: clean_num(x) if isinstance(x, (int, float)) else x),
