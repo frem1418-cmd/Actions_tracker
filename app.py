@@ -410,12 +410,8 @@ with st.sidebar:
         show_add = st.toggle("➕ Créer")
     with col2:
         show_del = st.toggle("🗑️", help="Supprimer un portefeuille")
-    col_news1, col_news2 = st.sidebar.columns([1, 4], vertical_alignment="center")
-    with col_news1:
-        show_news_portfolio = st.checkbox("")
-    with col_news2:
-        # On affiche l'icône et le texte dans la colonne large
-        st.markdown("📰 **Actualités**", help="Afficher les Actualités du portefeuille")
+
+    
 
     # Logique d'Ajout
     if show_add:
@@ -455,6 +451,23 @@ with st.sidebar:
             else:
                 st.error("🚫 Impossible de supprimer la dernière liste !")
 
+# Ajout du bouton actualitées 
+# 1. Ajouter de l'espace sous les boutons Créer/Supprimer
+    st.sidebar.markdown("<br>", unsafe_allow_value=True) 
+    # OU plus simplement : st.sidebar.write("") 
+
+    # 2. Créer des colonnes très serrées pour rapprocher la case et le texte
+    # Le ratio [0.5, 4] rapproche la col1 de la col2 au maximum
+    col_news1, col_news2 = st.sidebar.columns([0.5, 4], vertical_alignment="center")
+
+    with col_news1:
+    # On laisse le label vide pour ne pas prendre de place
+        show_news_portfolio = st.checkbox("", value=True, key="chk_news_port")
+
+    with col_news2:
+    # On colle l'icône et le texte ici
+        st.markdown("📰 **Actualités**", help="Afficher les Actualités du portefeuille")
+    
     st.divider()
     # --- ÉTAPE B : ÉDITER & SAUVEGARDER (Ton code actuel) ---
     # On charge le contenu de la liste sélectionnée
