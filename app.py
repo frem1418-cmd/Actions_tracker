@@ -24,13 +24,9 @@ def get_quick_news(ticker):
         for e in f.entries[:3]:
             pol = TextBlob(e.title).sentiment.polarity
             icon = "🟢" if pol > 0.1 else "🔴" if pol < -0.1 else "⚪"
-            dt = e.published[:16] if hasattr(e, 'published') else "Date inconnue"
-            news_list.append({
-                'titre': e.title,
-                'lien': e.link,
-                'badge': f"{icon} 🇫🇷",
-                'date': dt
-            })
+            dt = e.published[5:16] if hasattr(e, 'published') else ""
+            news_list.append({'date': dt, 'titre': e.title, 'lien': e.link, 'badge': f"{icon} 🇫🇷"})
+             
     except: pass
 
     # --- 2. Finviz US ---
@@ -474,17 +470,13 @@ if t_list:
             if tickers_input:
                 liste_tickers = [t.strip().upper() for t in tickers_input.split(',') if t.strip()]
                 for t in liste_tickers:
-                    # Container avec bordure pour un look "Liste" propre
-                    with st.container(border=True):
-                        st.markdown(f"### 🏢 {t}")
+                    with st.expander(f"**{t}**", expanded=True):
                         articles = get_quick_news(t)
-                        
                         if articles:
                             for a in articles:
-                                # Affichage cohérent : Date en gris, puis Ligne Titre
-                                st.caption(f"🕒 {a['date']}")
-                                st.markdown(f"{a['badge']} | [{a['titre']}]({a['lien']})")
-                                st.divider() # Petite ligne subtile entre deux articles                          
+                                # UNE SEULE LIGNE : Badge | Date Heure | Titre
+                                # Pas de divider, pas de write("---")
+                                st.markdown(f"{a['badge']} | **{a['date']}** | [{a['titre']}]({a['lien']})")                    
                         else:
                             st.caption("Aucune news trouvée.")
             else:
