@@ -485,7 +485,7 @@ if t_list:
                     except:
                         nom_action = t
                     with st.expander(f"🏢 **{nom_action}** ({t})", expanded=True):
-                        articles = get_quick_news(t)
+                        articles = get_quick_news(t, nom_action)
                         if articles:
                             for a in articles:
                                 # UNE SEULE LIGNE : Badge | Date Heure | Titre
