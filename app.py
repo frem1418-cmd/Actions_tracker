@@ -453,7 +453,7 @@ with st.sidebar:
 
 # Ajout du bouton actualitées 
 # 1. Ajouter de l'espace sous les boutons Créer/Supprimer
-    st.sidebar.markdown("<br>", unsafe_allow_value=True) 
+    st.sidebar.markdown("<br>", unsafe_allow_html=True) 
     # OU plus simplement : st.sidebar.write("") 
 
     # 2. Créer des colonnes très serrées pour rapprocher la case et le texte
