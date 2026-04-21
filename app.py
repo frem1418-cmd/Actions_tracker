@@ -13,10 +13,12 @@ from bs4 import BeautifulSoup
 
 
 #Fonction pour récupérer les news et analyser le sentiment
-def get_quick_news(ticker, company_name):
+def get_quick_news(ticker):
     news_list = []
     t_clean = ticker.split('.')[0].upper()
-    
+    # On récupère la date du jour au format Google pour comparer
+    # ex: "21 Apr"
+    today_str = datetime.now().strftime("%d %b")
     # --- 1. Google News FR ---
     try:
         url = f"https://news.google.com/rss/search?q={t_clean}+bourse&hl=fr&gl=FR&ceid=FR:fr"
@@ -24,10 +26,21 @@ def get_quick_news(ticker, company_name):
         for e in f.entries[:5]:
             pol = TextBlob(e.title).sentiment.polarity
             icon = "🟢" if pol > 0.1 else "🔴" if pol < -0.1 else "⚪"
-            raw_pub = e.published if hasattr(e, 'published') else ""
-            clean_dt = f"{raw_pub[5:11]} {raw_pub[17:22]}" if raw_pub else ""
-            news_list.append({'date': clean_dt, 'titre': e.title, 'lien': e.link, 'badge': f"{icon} 🌐"})
-             
+            raw_pub = e.published
+            day_month = raw_pub[5:11] # "21 Apr"
+            hour = raw_pub[17:22]    # "10:30"
+            
+            # Si c'est aujourd'hui, on remplace par Today
+            display_date = f"Today {hour}" if day_month == today_str else f"{day_month} {hour}"
+            
+            # On stocke aussi l'objet datetime pour le tri final
+            dt_obj = datetime.strptime(raw_pub[5:25], "%d %b %Y %H:%M:%S")
+
+            news_list.append({
+                'dt_obj': dt_obj,
+                'date': display_date,
+                'titre': e.title, 'lien': e.link, 'badge': f"{icon} 🌐"
+            })
     except: pass
 
     # --- 2. Finviz US ---
@@ -41,35 +54,45 @@ def get_quick_news(ticker, company_name):
             soup = BeautifulSoup(r.content, 'html.parser')
             table = soup.find(id='news-table')
             if table:
-                last_date_formatee = ""
+                last_dt_raw = ""
                 for row in table.findAll('tr')[:5]:
                     tds = row.findAll('td')
                     raw_dt = tds[0].get_text(strip=True)
                     
                     if " " in raw_dt:
-                        date_part = raw_dt.split(' ')[0] # ex: "Apr-20-26" ou "Today"
-                        tm = raw_dt.split(' ')[1]        # ex: "10:08PM"
-                        
-                        if "-" in date_part:
-                            parts = date_part.split("-")
-                            # INVERSION : "Apr-20" devient "20 Apr"
-                            last_date_formatee = f"{parts[1]} {parts[0]}"
-                        else:
-                            last_date_formatee = date_part # Garde "Today"
+                        date_part = raw_dt.split(' ')[0] # "Today" ou "Apr-21-26"
+                        tm = raw_dt.split(' ')[1]        # "10:08PM"
+                        last_dt_raw = date_part
                     else:
-                        tm = raw_dt # Garde l'heure seule si pas de date sur la ligne
+                        tm = raw_dt
+                        date_part = last_dt_raw
                     
+                    # Transformation de la date Finviz pour le tri
+                    if date_part == "Today":
+                        dt_obj = datetime.now() 
+                        display_date = f"Today {tm}"
+                    else:
+                        # On transforme "Apr-20-26 10:00PM" en objet datetime
+                        full_dt_str = f"{date_part} {tm}"
+                        dt_obj = datetime.strptime(full_dt_str, "%b-%d-%y %I:%M%p")
+                        # Format d'affichage : "20 Apr 10:00PM"
+                        parts = date_part.split("-")
+                        display_date = f"{parts[1]} {parts[0]} {tm}"
+
                     t_text = row.a.get_text()
                     pol = TextBlob(t_text).sentiment.polarity
                     icon = "🟢" if pol > 0.1 else "🔴" if pol < -0.1 else "⚪"
                     
                     news_list.append({
-                        'date': f"{last_date_formatee} {tm}",
-                        'titre': t_text,
-                        'lien': row.a['href'],
-                        'badge': f"{icon} 📈"
+                        'dt_obj': dt_obj,
+                        'date': display_date,
+                        'titre': t_text, 'lien': row.a['href'], 'badge': f"{icon} 📈"
                     })
     except: pass
+    # --- LE TRI FINAL (Plus récent en haut) ---
+    # On trie la liste par l'objet 'dt_obj' du plus récent au plus ancien
+    news_list.sort(key=lambda x: x['dt_obj'], reverse=True)
+    
     return news_list
     
 
