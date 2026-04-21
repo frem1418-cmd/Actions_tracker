@@ -16,24 +16,25 @@ from bs4 import BeautifulSoup
 def get_quick_news(ticker):
     news_list = []
     t_clean = ticker.split('.')[0].upper()
+    from textblob import TextBlob
     
-    # 1. Google News FR (2 news)
+    # --- 1. Google News FR ---
     try:
         url = f"https://news.google.com/rss/search?q={t_clean}+bourse&hl=fr&gl=FR&ceid=FR:fr"
         f = feedparser.parse(url)
         for e in f.entries[:3]:
-            # On calcule le sentiment ici pour avoir le badge
             pol = TextBlob(e.title).sentiment.polarity
             icon = "🟢" if pol > 0.1 else "🔴" if pol < -0.1 else "⚪"
-            dt = e.published[:16] if hasattr(e, 'published') else ""
+            date_str = e.published[:16] if hasattr(e, 'published') else ""
             news_list.append({
-                'titre': e.title, 
-                'lien': e.link, 
-                'badge': f"{icon} 🇫🇷"
+                'titre': e.title,
+                'lien': e.link,
+                'badge': f"{icon} 🇫🇷",
+                'date': date_str
             })
     except: pass
-    
-    # 2. Finviz US (2 news)
+
+    # --- 2. Finviz US ---
     try:
         h = {'User-Agent': 'Mozilla/5.0'}
         r = requests.get(f"https://finviz.com/quote.ashx?t={t_clean}", headers=h, timeout=5)
@@ -41,21 +42,30 @@ def get_quick_news(ticker):
             soup = BeautifulSoup(r.content, 'html.parser')
             table = soup.find(id='news-table')
             if table:
+                last_date = ""
                 for row in table.findAll('tr')[:3]:
+                    tds = row.findAll('td')
+                    date_text = tds[0].get_text(strip=True)
+                    if " " in date_text:
+                        last_date = date_text.split(' ')[0]
+                        tm = date_text.split(' ')[1]
+                    else:
+                        tm = date_text
+                    
                     t_text = row.a.get_text()
                     t_link = row.a['href']
-                    
                     pol = TextBlob(t_text).sentiment.polarity
                     icon = "🟢" if pol > 0.1 else "🔴" if pol < -0.1 else "⚪"
                     
                     news_list.append({
                         'titre': t_text,
                         'lien': t_link,
-                        'badge': f"{icon} 📊"
-                        'date': date_td
+                        'badge': f"{icon} 📊",
+                        'date': f"{last_date} {tm}"
                     })
     except: pass
     return news_list
+    
 
 # --- 1. CONFIGURATION & DOSSIERS ---
 WATCHLIST_DIR = "watchlists"
