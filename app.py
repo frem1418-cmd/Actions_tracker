@@ -561,7 +561,25 @@ if t_list:
                             'lien': entry.link,
                         })
                 except: pass
-              
+                # --- 2. Récupération Yahoo Finance (International) ---
+                try:
+                    t_obj = yf.Ticker(ticker_brut)
+                    news_yahoo = t_obj.news
+                    if news_yahoo:
+                        for n in news_yahoo:
+                            ts = n.get('providerPublishTime')
+                            if ts:
+                                # On convertit le timestamp Yahoo en objet datetime pour le tri
+                                dt_obj = datetime.fromtimestamp(ts)
+                                all_news.append({
+                                    'timestamp': dt_obj,
+                                    'date_visuelle': dt_obj.strftime('%d/%m'),
+                                    'titre': n.get('title'),
+                                    'source': f"🌎 {n.get('publisher', 'Yahoo')}",
+                                    'lien': n.get('link')
+                                })
+                except:
+                    pass
                 # --- 3. Affichage ---
                 if all_news:
                     # Optionnel : trier par date ici si besoin, 
