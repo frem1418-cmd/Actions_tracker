@@ -4,7 +4,7 @@ import pandas as pd
 import os
 import requests
 import feedparser
-from datetime import datetime
+from datetime import datetime, timedelta
 from textblob import TextBlob
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
@@ -21,11 +21,11 @@ def get_quick_news(ticker):
     try:
         url = f"https://news.google.com/rss/search?q={t_clean}+bourse&hl=fr&gl=FR&ceid=FR:fr"
         f = feedparser.parse(url)
-        for e in f.entries[:2]:
+        for e in f.entries[:3]:
             # On calcule le sentiment ici pour avoir le badge
             pol = TextBlob(e.title).sentiment.polarity
             icon = "🟢" if pol > 0.1 else "🔴" if pol < -0.1 else "⚪"
-            
+            dt = e.published[:16] if hasattr(e, 'published') else ""
             news_list.append({
                 'titre': e.title, 
                 'lien': e.link, 
@@ -41,7 +41,7 @@ def get_quick_news(ticker):
             soup = BeautifulSoup(r.content, 'html.parser')
             table = soup.find(id='news-table')
             if table:
-                for row in table.findAll('tr')[:2]:
+                for row in table.findAll('tr')[:3]:
                     t_text = row.a.get_text()
                     t_link = row.a['href']
                     
@@ -52,6 +52,7 @@ def get_quick_news(ticker):
                         'titre': t_text,
                         'lien': t_link,
                         'badge': f"{icon} 📊"
+                        'date': date_td
                     })
     except: pass
     return news_list
