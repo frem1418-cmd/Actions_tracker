@@ -109,7 +109,7 @@ def news_dashboard_module(liste_tickers):
     with col1:
         st.subheader("🗞️ Flux d'actualités en direct")
     with col2:
-        if st.button("🔄 Actualiser"):
+        if st.button("🔄 Actualiser", key="ref_action"):
             st.rerun(scope="fragment")
 
     for t in liste_tickers:
@@ -578,7 +578,7 @@ if t_list:
                 
                 # 2. On appelle la fonction "Fragment" qu'on a créée à l'étape 1
                 # --- SÉLECTEUR DE VUE ---
-                mode_vue = st.radio("Format d'affichage :", ["⏳ Flux Chronologique" , "🏢 Par Action"], horizontal=True)
+                mode_vue = st.radio("", ["⏳ Flux Chronologique" , "🏢 Par Action"], horizontal=True)
                 
                 if mode_vue == "⏳ Flux Chronologique":
                     news_timeline_module(liste_tickers)
