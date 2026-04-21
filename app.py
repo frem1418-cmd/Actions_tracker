@@ -41,34 +41,30 @@ def get_quick_news(ticker):
             soup = BeautifulSoup(r.content, 'html.parser')
             table = soup.find(id='news-table')
             if table:
-                last_date = ""
+                last_date_formatee = ""
                 for row in table.findAll('tr')[:5]:
                     tds = row.findAll('td')
                     raw_dt = tds[0].get_text(strip=True)
                     
                     if " " in raw_dt:
-                        # On sépare la date de l'heure
-                        date_part = raw_dt.split(' ')[0] # ex: Today ou Apr-20-26
-                        time_part = raw_dt.split(' ')[1] # ex: 05:00AM
+                        date_part = raw_dt.split(' ')[0] # ex: "Apr-20-26" ou "Today"
+                        tm = raw_dt.split(' ')[1]        # ex: "10:08PM"
                         
-                        # Si c'est une date formatée (pas Today), on enlève l'année (-26)
                         if "-" in date_part:
-                            # "Apr-20-26" -> "Apr-20"
-                            last_date = "-".join(date_part.split("-")[:2])
+                            parts = date_part.split("-")
+                            # INVERSION : "Apr-20" devient "20 Apr"
+                            last_date_formatee = f"{parts[1]} {parts[0]}"
                         else:
-                            # Garde "Today" tel quel
-                            last_date = date_part
-                        tm = time_part
+                            last_date_formatee = date_part # Garde "Today"
                     else:
-                        tm = raw_dt # C'est juste l'heure, on garde la date précédente
+                        tm = raw_dt # Garde l'heure seule si pas de date sur la ligne
                     
                     t_text = row.a.get_text()
                     pol = TextBlob(t_text).sentiment.polarity
                     icon = "🟢" if pol > 0.1 else "🔴" if pol < -0.1 else "⚪"
                     
-                    # Format final harmonisé : Jour-Mois Heure
                     news_list.append({
-                        'date': f"{last_date} {tm}",
+                        'date': f"{last_date_formatee} {tm}",
                         'titre': t_text,
                         'lien': row.a['href'],
                         'badge': f"{icon} 📈"
