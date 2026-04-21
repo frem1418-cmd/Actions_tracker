@@ -92,7 +92,7 @@ def get_quick_news(ticker):
     # --- LE TRI FINAL (Plus récent en haut) ---
     # On trie la liste par l'objet 'dt_obj' du plus récent au plus ancien
     news_list.sort(key=lambda x: x['dt_obj'], reverse=True)
-    
+
     return news_list
     
 
@@ -508,7 +508,7 @@ if t_list:
                     except:
                         nom_action = t
                     with st.expander(f"🏢 **{nom_action}** ({t})", expanded=True):
-                        articles = get_quick_news(t, nom_action)
+                        articles = get_quick_news(t)
                         if articles:
                             for a in articles:
                                 # UNE SEULE LIGNE : Badge | Date Heure | Titre
