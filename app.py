@@ -410,7 +410,7 @@ with st.sidebar:
         show_add = st.toggle("➕ Créer", help="Créer un nouveau portefeuille")
     with col2:
         show_del = st.toggle("🗑️", help="Supprimer un portefeuille")
-    col_news1, col_news2 = st.sidebar.columns([1, 4], vertical_alignment="center")
+    col_news1, col_news2 = st.sidebar.columns([1, 4])
     with col_news1:
         show_news_portfolio = st.checkbox("")
     with col_news2:
