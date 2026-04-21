@@ -10,10 +10,10 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import requests
 from bs4 import BeautifulSoup
-import streamlit as st
 from streamlit_gsheets import GSheetsConnection
 
 
+COLUMNS_FILE = "columns_config.txt"
 #Fonction pour récupérer les news et analyser le sentiment
 def get_quick_news(ticker):
     news_list = []
@@ -158,34 +158,23 @@ def news_timeline_module(liste_tickers):
     else:
         st.info("Aucune news disponible.")    
 
-# --- FONCTION DE CHARGEMENT DES WATCHLISTS DEPUIS GOOGLE SHEETS ---
-def load_watchlist_sheets(watchlist_name):
-    try:
-        conn = st.connection("gsheets", type=GSheetsConnection)
-        df = conn.read(worksheet="Watchlists") # Nom de ton onglet Google Sheets
-        # On cherche la ligne qui correspond au nom de la liste
-        row = df[df['list_name'] == watchlist_name]
-        if not row.empty:
-            return row.iloc[0]['tickers']
-        return ""
-    except Exception as e:
-        st.error(f"Erreur Sheets: {e}")
-        return ""
+
 
 # --- 1. CONFIGURATION & DOSSIERS ---
-WATCHLIST_DIR = "watchlists"
-COLUMNS_FILE = "columns_config.txt"
+# --- 1. CONFIGURATION GOOGLE SHEETS ---
+from streamlit_gsheets import GSheetsConnection
 
-# Création propre du dossier
-if not os.path.exists(WATCHLIST_DIR):
-    os.makedirs(WATCHLIST_DIR)
+# On crée la connexion (assure-toi d'avoir configuré les Secrets sur Streamlit Cloud)
+conn = st.connection("gsheets", type=GSheetsConnection)
 
-# On ne crée rien automatiquement, ou alors on crée un fichier "Ma Liste.txt" 
-# seulement si le dossier est TOTALEMENT absent (pas seulement vide)
-if not os.path.exists(WATCHLIST_DIR):
-    os.makedirs(WATCHLIST_DIR)
-    with open(os.path.join(WATCHLIST_DIR, "Ma Liste.txt"), "w", encoding="utf-8") as f:
-        f.write("AAPL")
+def get_all_portfolios():
+    """Récupère toutes les listes depuis Google Sheets"""
+    try:
+        df = conn.read(ttl=0)
+        return df.dropna(subset=['portefeuille_name'])
+    except Exception as e:
+        st.error(f"Erreur de connexion Google Sheets : {e}")
+        return pd.DataFrame(columns=['portefeuille_name', 'tickers'])
 
 # --- 2. RÉFÉRENTIELS ---
 SECTORS_FR = {
@@ -343,27 +332,48 @@ def fetch_stock_data(ticker_str):
         }
     except: return None
 
-# --- 4. GESTION LISTES & COLONNES ---
+# --- 4. GESTION LISTES VIA GOOGLE SHEETS ---
+
 def get_all_watchlists():
+    """Récupère les noms de tous les portefeuilles (remplace l'ancien os.listdir)"""
     try:
-        conn = st.connection("gsheets", type=GSheetsConnection)
-        df = conn.read(worksheet="Watchlists")
-        # On récupère les noms uniques dans la colonne 'list_name'
-        if 'list_name' in df.columns:
-            return sorted(df['list_name'].dropna().unique().tolist())
-        return ["Portefeuille Principal"]
-    except Exception as e:
-        # En cas d'erreur (ex: pas de connexion), on renvoie une liste par défaut
-        return ["Portefeuille Principal"]
+        df = conn.read(ttl=0)
+        # On retourne la liste des noms triée
+        return sorted(df['portefeuille_name'].dropna().unique().tolist())
+    except:
+        return []
 
 def load_watchlist(name):
-    path = os.path.join(WATCHLIST_DIR, f"{name}.txt")
-    if os.path.exists(path):
-        with open(path, "r", encoding="utf-8") as f:
-            return f.read()
-    return ""
+    """Récupère les tickers d'un portefeuille spécifique"""
+    try:
+        df = conn.read(ttl=0)
+        # On cherche les tickers correspondant au nom
+        row = df[df['portefeuille_name'] == name]
+        if not row.empty:
+            return row['tickers'].values[0]
+        return ""
+    except:
+        return ""
 
-
+def save_watchlist(name, content):
+    """Sauvegarde les tickers dans Google Sheets"""
+    try:
+        # 1. On récupère l'état actuel de la Sheet
+        df = conn.read(ttl=0)
+        
+        # 2. Si le nom existe, on met à jour, sinon on ajoute
+        if name in df['portefeuille_name'].values:
+            df.loc[df['portefeuille_name'] == name, 'tickers'] = content
+        else:
+            new_row = pd.DataFrame({'portefeuille_name': [name], 'tickers': [content]})
+            df = pd.concat([df, new_row], ignore_index=True)
+        
+        # 3. On pousse la mise à jour vers Google Sheets
+        conn.update(data=df)
+        st.success(f"✅ Liste '{name}' synchronisée sur Google Sheets !")
+    except Exception as e:
+        st.error(f"Erreur lors de la sauvegarde : {e}")
+        
 def load_columns(all_cols):
     if os.path.exists(COLUMNS_FILE):
         try:
@@ -376,39 +386,6 @@ def load_columns(all_cols):
             default_cols = ["Nom", "Secteur", "Prix Actuel", "Entrée Synthèse (-15%)", "Entrée BNA -15%", "Entrée FCF -15%", "Entrée Analystes -15%", "Avis Analystes", "Nb Analystes" "Santé (Piotroski)"]
             return default_cols
     return ["Nom", "Secteur", "Prix Actuel", "Entrée Synthèse (-15%)", "Avis Analystes"]
-
-# --- FONCTION DE CHARGEMENT DES WATCHLISTS DEPUIS GOOGLE SHEETS ---
-def load_watchlist_gsheets(list_name):
-    try:
-        conn = st.connection("gsheets", type=GSheetsConnection)
-        # On lit l'onglet nommé "Watchlists"
-        df = conn.read(worksheet="Watchlists")
-        
-        # On filtre pour trouver la bonne liste
-        res = df[df['list_name'] == list_name]
-        if not res.empty:
-            return res.iloc[0]['tickers']
-        return ""
-    except Exception as e:
-        # Si ça rate, on ne bloque pas tout, on renvoie vide
-        return ""
-# --- FONCTION DE SAUVEGARDE DES WATCHLISTS VERS GOOGLE SHEETS ---
-def save_watchlist_gsheets(list_name, tickers_text):
-    try:
-        conn = st.connection("gsheets", type=GSheetsConnection)
-        df = conn.read(worksheet="Watchlists")
-        
-        # Si la liste existe, on met à jour, sinon on ajoute une ligne
-        if list_name in df['list_name'].values:
-            df.loc[df['list_name'] == list_name, 'tickers'] = tickers_text
-        else:
-            new_row = pd.DataFrame({'list_name': [list_name], 'tickers': [tickers_text]})
-            df = pd.concat([df, new_row], ignore_index=True)
-            
-        conn.update(worksheet="Watchlists", data=df)
-        st.success(f"✅ Liste '{list_name}' synchronisée sur Google Sheets !")
-    except Exception as e:
-        st.error(f"Erreur de sauvegarde : {e}")
 
 # --- 5. INTERFACE ---
 st.set_page_config(page_title="Expert Bourse Pro+", layout="wide")
@@ -450,8 +427,8 @@ with st.sidebar:
             sel_opt = st.selectbox("Résultats :", opt)
             tk_add = sug[opt.index(sel_opt)]['symbol']
             if st.button(f"➕ Ajouter {tk_add}"):
-                cur_tk = load_watchlist_gsheets(st.session_state.get('sel_list', 'Portefeuille Principal'))
-                save_watchlist_gsheets(st.session_state.get('sel_list', 'Portefeuille Principal'), (cur_tk + f", {tk_add}") if cur_tk else tk_add)
+                cur_tk = load_watchlist(st.session_state.get('sel_list', 'Portefeuille Principal'))
+                save_watchlist(st.session_state.get('sel_list', 'Portefeuille Principal'), (cur_tk + f", {tk_add}") if cur_tk else tk_add)
                 st.rerun()
 
     st.divider()
@@ -476,7 +453,7 @@ with st.sidebar:
         new_name = st.text_input("Nom de la liste :", placeholder="Ex: Dividendes")
         if st.button("Confirmer Création", use_container_width=True):
             if new_name:
-                save_watchlist_gsheets(new_name, "AAPL")
+                save_watchlist(new_name, "AAPL")
                 st.success(f"'{new_name}' créée !")
                 st.rerun()
             else:
@@ -528,20 +505,20 @@ with st.sidebar:
     st.divider()
     # --- ÉTAPE B : ÉDITER & SAUVEGARDER (Ton code actuel) ---
     # On charge le contenu de la liste sélectionnée
-    current_content = load_watchlist_gsheets(sel_list)
+    current_content = load_watchlist(sel_list)
 
-    tickers_input = st.text_area("Éditer les tickers :", value=current_content, height=100).upper()
-    if st.button("💾 Sauver Liste"): save_watchlist_gsheets(sel_list, tickers_input)
-    st.rerun() # Pour rafraîchir l'affichage immédiatement
-    
+    tickers_input = st.text_area("Éditer les tickers :", value=load_watchlist(sel_list), height=100).upper()
+    if st.button("💾 Sauver Liste"): save_watchlist(sel_list, tickers_input)
+
     st.divider()   
     cols_all = ["Nom", "Secteur", "Prix Actuel", "BNA Actuel", "PER Actuel", "BNA Forward", "PER Forward", 
                 "Entrée BNA -15%", "Entrée FCF -15%", "Entrée Analystes -15%", "Entrée Synthèse (-15%)", 
                 "Santé (Piotroski)", "Chg 1J", "Chg 1M", "Chg YTD", "Nb Analystes", "Dividende (€/$)", "Rendement %", "Date Détachement", "Avis Analystes"]
 
-    # --- 1. On initialise la session_state si elle n'existe pas ---
-    if 'selected_columns' not in st.session_state:
-        st.session_state.selected_columns = load_columns(cols_all)
+    # --- 1. On initialise la session_state sans passer par le fichier local ---
+if 'selected_columns' not in st.session_state:
+    # On définit tes colonnes préférées directement ici
+    st.session_state.selected_columns = ["Nom", "Secteur", "Prix Actuel", "Entrée Synthèse (-15%)", "Avis Analystes"]
 
     # --- 2. Le multiselect utilise et met à jour la session_state ---
     sel_cols = st.multiselect(

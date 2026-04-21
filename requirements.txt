@@ -6,3 +6,4 @@ textblob
 plotly
 feedparser
 beautifulsoup4
+st-gsheets-connection

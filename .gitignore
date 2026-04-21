@@ -1,0 +1,17 @@
+# Configuration locale de Streamlit (contient tes secrets/mots de passe)
+.streamlit/secrets.toml
+.streamlit/config.toml
+
+# Dossiers virtuels Python
+venv/
+.venv/
+__pycache__/
+
+# Anciennes watchlists locales (fichiers .txt)
+Watchlists/
+*.txt
+
+# Fichiers système
+.DS_Store
+Thumbs.db
+*.bat
