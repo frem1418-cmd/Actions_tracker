@@ -24,12 +24,12 @@ def get_quick_news(ticker):
         for e in f.entries[:3]:
             pol = TextBlob(e.title).sentiment.polarity
             icon = "🟢" if pol > 0.1 else "🔴" if pol < -0.1 else "⚪"
-            date_str = e.published[:16] if hasattr(e, 'published') else ""
+            dt = e.published[:16] if hasattr(e, 'published') else "Date inconnue"
             news_list.append({
                 'titre': e.title,
                 'lien': e.link,
                 'badge': f"{icon} 🇫🇷",
-                'date': date_str
+                'date': dt
             })
     except: pass
 
@@ -47,23 +47,23 @@ def get_quick_news(ticker):
                 last_date = ""
                 for row in table.findAll('tr')[:5]:
                     tds = row.findAll('td')
-                    if len(tds) < 2: continue
-                    # Gestion de la date Finviz (elle n'est pas répétée sur chaque ligne)
-                    raw_date = tds[0].get_text(strip=True)
-                    if " " in raw_date: # Format: Jan-12 08:00AM
-                        last_date = raw_date.split(' ')[0]
-                        tm = raw_date.split(' ')[1]
-                    else: # Format: 08:00AM (on reprend la dernière date connue)
-                        tm = raw_date
+                    raw_dt = tds[0].get_text(strip=True)
+                    # Gestion de la date persistante Finviz
+                    if " " in raw_dt:
+                        last_date = raw_dt.split(' ')[0]
+                        tm = raw_dt.split(' ')[1]
+                    else:
+                        tm = raw_dt
                     
                     t_text = row.a.get_text()
-                    t_link = row.a['href']
                     pol = TextBlob(t_text).sentiment.polarity
                     icon = "🟢" if pol > 0.1 else "🔴" if pol < -0.1 else "⚪"
                     
                     news_list.append({
-                        'titre': t_text, 'lien': t_link, 
-                        'badge': f"{icon} 📊", 'date': f"{last_date} {tm}"
+                        'date': f"{last_date} {tm}",
+                        'titre': t_text,
+                        'lien': row.a['href'],
+                        'badge': f"{icon} 📊 US"
                     })
     except: pass
     return news_list
@@ -469,24 +469,24 @@ if t_list:
             st.subheader(f"🗞️ Revue de Presse : {sel_list}")
             
             # On récupère les tickers de ta zone de texte (sidebar)
-            liste_tickers = [t.strip().upper() for t in tickers_input.split(',') if t.strip()]
             
-            if liste_tickers:
-                cols_news = st.columns(3)
-                for i, t in enumerate(liste_tickers):
-                    with cols_news[i % 3]:
-                        with st.expander(f"**{t}**", expanded=True):
-                            articles = get_quick_news(t) # Ta fonction de l'étape 2
-                            if articles:
-                                for a in articles:
-                                    # 1. On affiche la date en petit gris
-                                    st.caption(f"🕒 {a.get('date', '')}")
-                                    # 2. On affiche le badge et le titre
-                                    st.markdown(f"{a['badge']} [{a['titre']}]({a['lien']})")
-                                    # 3. Une petite ligne de séparation pour la clarté
-                                    st.write("---")                                   
-                            else:
-                                st.caption("Aucune news trouvée.")
+            
+            if tickers_input:
+                liste_tickers = [t.strip().upper() for t in tickers_input.split(',') if t.strip()]
+                for t in liste_tickers:
+                    # Container avec bordure pour un look "Liste" propre
+                    with st.container(border=True):
+                        st.markdown(f"### 🏢 {t}")
+                        articles = get_quick_news(t)
+                        
+                        if articles:
+                            for a in articles:
+                                # Affichage cohérent : Date en gris, puis Ligne Titre
+                                st.caption(f"🕒 {a['date']}")
+                                st.markdown(f"{a['badge']} | [{a['titre']}]({a['lien']})")
+                                st.divider() # Petite ligne subtile entre deux articles                          
+                        else:
+                            st.caption("Aucune news trouvée.")
             else:
                 st.info("La liste de tickers est vide.")
 
