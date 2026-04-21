@@ -11,6 +11,7 @@ from plotly.subplots import make_subplots
 import requests
 from bs4 import BeautifulSoup
 
+
 # --- 1. CONFIGURATION & DOSSIERS ---
 WATCHLIST_DIR = "watchlists"
 COLUMNS_FILE = "columns_config.txt"
@@ -607,14 +608,32 @@ if t_list:
                               
 
                 # --- 3. Affichage ---
+                # --- 3. TRI ET AFFICHAGE AVEC ANALYSE DE SENTIMENT ---
                 if all_news:
-                    # Optionnel : trier par date ici si besoin, 
                     all_news.sort(key=lambda x: x['timestamp'], reverse=True)
-                    for article in all_news[:12]: # On affiche les 8 meilleurs résultats fusionnés
-                        label = f"📅 **{article['date_visuelle']}** | {article['titre']}"
+                    
+                    for article in all_news[:12]:
+                        # Analyse de sentiment avec TextBlob
+                        analysis = TextBlob(article['titre'])
+                        polarity = analysis.sentiment.polarity  # Score entre -1 et 1
+                        
+                        # Définition de l'emoji et de la couleur selon le score
+                        if polarity > 0.1:
+                            sentiment_icon = "🟢"  # Positif
+                            sentiment_label = "Bullish"
+                        elif polarity < -0.1:
+                            sentiment_icon = "🔴"  # Négatif
+                            sentiment_label = "Bearish"
+                        else:
+                            sentiment_icon = "⚪"  # Neutre
+                            sentiment_label = "Neutre"
+
+                        # Affichage du label avec le sentiment
+                        label = f"{sentiment_icon} **{article['date_visuelle']}** | {article['titre']}"
+                        
                         with st.expander(label):
                             st.write(f"**Source :** {article['source']}")
-                            st.caption(f"Heure de publication : {article['timestamp'].strftime('%H:%M')}")
+                            st.write(f"**Sentiment :** {sentiment_label} (Score: {round(polarity, 2)})")
                             st.link_button("Lire l'article", article['lien'])
                 else:
                     st.info(f"ℹ️ Aucune actualité récente disponible pour {ticker_clean}.")
