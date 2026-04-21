@@ -19,7 +19,7 @@ def get_quick_news(ticker, company_name):
     
     # --- 1. Google News FR ---
     try:
-        url = f"https://news.google.com/rss/search?q={company_name}+bourse&hl=fr&gl=FR&ceid=FR:fr"
+        url = f"https://news.google.com/rss/search?q={t_clean}+bourse&hl=fr&gl=FR&ceid=FR:fr"
         f = feedparser.parse(url)
         for e in f.entries[:5]:
             pol = TextBlob(e.title).sentiment.polarity
