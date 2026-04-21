@@ -64,28 +64,28 @@ def get_quick_news(ticker):
                         tm = raw_dt.split(' ')[1]        # "10:08PM"
                         last_dt_raw = date_part
                     else:
-                        tm = raw_dt
+                        tm_12h = raw_dt
                         date_part = last_dt_raw
-                    
+                    # Conversion de l'heure AM/PM en 24h
+                    # On crée un objet time pour transformer 10:00PM en 22:00
+                    time_obj = datetime.strptime(tm_12h, "%I:%M%p")
+                    hour_24 = time_obj.strftime("%H:%M")
+
+
                     # Transformation de la date Finviz pour le tri
                     if date_part == "Today":
-                        dt_obj = datetime.now() 
-                        display_date = f"Today {tm}"
+                        dt_obj = datetime.combine(datetime.now().date(), time_obj.time()) 
+                        display_date = f"Today {hour_24}"
                     else:
-                        # On transforme "Apr-20-26 10:00PM" en objet datetime
-                        full_dt_str = f"{date_part} {tm}"
-                        dt_obj = datetime.strptime(full_dt_str, "%b-%d-%y %I:%M%p")
-                        # Format d'affichage : "20 Apr 10:00PM"
-                        parts = date_part.split("-")
-                        display_date = f"{parts[1]} {parts[0]} {tm}"
+                        parts = date_part.split("-") # "Apr-20-26"
+                        display_date = f"{parts[1]} {parts[0]} {hour_24}"
+                        dt_obj = datetime.strptime(f"{date_part} {tm_12h}", "%b-%d-%y %I:%M%p")
 
                     t_text = row.a.get_text()
-                    pol = TextBlob(t_text).sentiment.polarity
-                    icon = "🟢" if pol > 0.1 else "🔴" if pol < -0.1 else "⚪"
+                    icon = "🟢" if TextBlob(t_text).sentiment.polarity > 0.1 else "⚪"
                     
                     news_list.append({
-                        'dt_obj': dt_obj,
-                        'date': display_date,
+                        'dt_obj': dt_obj, 'date': display_date,
                         'titre': t_text, 'lien': row.a['href'], 'badge': f"{icon} 📈"
                     })
     except: pass
