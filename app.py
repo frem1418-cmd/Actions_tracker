@@ -104,6 +104,7 @@ def get_action_name(ticker):
 @st.fragment(run_every="5m") # S'actualise seul toutes les 5 minutes
 def news_dashboard_module(liste_tickers):
     # Barre d'outils discrète en haut du module
+    
     col1, col2 = st.columns([0.8, 0.2])
     with col1:
         st.subheader("🗞️ Flux d'actualités en direct")
@@ -127,8 +128,14 @@ def news_dashboard_module(liste_tickers):
 # --- Fonction New - Vue Flux ou Timeline- liste chronologique des news ---
 @st.fragment(run_every="5m")
 def news_timeline_module(liste_tickers):
-    all_news = []
+    col_titre, col_btn = st.columns([0.8, 0.2])
+    with col_btn:
+        if st.button("🔄 Actualiser", key="ref_flux"):
+            st.rerun(scope="fragment")
+    # --------------------------
     
+    all_news = []
+        
     # 1. On collecte toutes les news de tous les tickers
     for t in liste_tickers:
         nom = get_action_name(t)
