@@ -49,7 +49,7 @@ def get_quick_news(ticker):
         h = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
         }
-        r = requests.get(f"https://finviz.com/quote.ashx?t={t_clean}", headers=h, timeout=10)
+        r = requests.get(f"https://finviz.com/quote.ashx?t={t_clean}", headers=h, timeout=5)
         if r.status_code == 200:
             soup = BeautifulSoup(r.content, 'html.parser')
             table = soup.find(id='news-table')
@@ -60,21 +60,20 @@ def get_quick_news(ticker):
                     raw_dt = tds[0].get_text(strip=True)
                     
                     if " " in raw_dt:
-                        date_part = raw_dt.split(' ')[0] # "Today" ou "Apr-21-26"
-                        tm = raw_dt.split(' ')[1]        # "10:08PM"
+                        date_part = raw_dt.split(' ')[0] 
+                        tm_12h = raw_dt.split(' ')[1] # ex: "10:00PM"
                         last_dt_raw = date_part
                     else:
                         tm_12h = raw_dt
                         date_part = last_dt_raw
+                    
                     # Conversion de l'heure AM/PM en 24h
                     # On crée un objet time pour transformer 10:00PM en 22:00
                     time_obj = datetime.strptime(tm_12h, "%I:%M%p")
                     hour_24 = time_obj.strftime("%H:%M")
 
-
-                    # Transformation de la date Finviz pour le tri
                     if date_part == "Today":
-                        dt_obj = datetime.combine(datetime.now().date(), time_obj.time()) 
+                        dt_obj = datetime.combine(datetime.now().date(), time_obj.time())
                         display_date = f"Today {hour_24}"
                     else:
                         parts = date_part.split("-") # "Apr-20-26"
