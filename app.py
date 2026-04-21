@@ -412,7 +412,7 @@ with st.sidebar:
         show_del = st.toggle("🗑️", help="Supprimer un portefeuille")
     col_news1, col_news2 = st.sidebar.columns([1, 4], vertical_alignment="center")
     with col_news1:
-        show_news_portfolio = st.checkbox("", help="Afficher les Actualités du portefeuille")
+        show_news_portfolio = st.checkbox("")
     with col_news2:
         # On affiche l'icône et le texte dans la colonne large
         st.markdown("📰 **Actualités**", help="Afficher les Actualités du portefeuille")
