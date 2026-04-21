@@ -565,10 +565,12 @@ if t_list:
                 except: pass
                 # --- 2. SOURCE ALTERNATIVE : FINVIZ ---
                 try:
-                    url_finviz = f"https://finviz.com/quote.ashx?t={ticker_clean}"
+                    # 1. On force le ticker en MAJUSCULES et on enlève le .PA ou .nx
+                    t_finviz = ticker_clean.upper().split('.')[0]
+                    url_finviz = f"https://finviz.com/quote.ashx?t={t_finviz}"
                     # Finviz demande un "User-Agent" pour ne pas bloquer
-                    headers = {'User-Agent': 'Mozilla/5.0'}
-                    response = requests.get(url_finviz, headers=headers, timeout=5)
+                    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+                    response = requests.get(url_finviz, headers=headers, timeout=10)
                     
                     if response.status_code == 200:
                         soup = BeautifulSoup(response.content, 'html.parser')
@@ -577,20 +579,32 @@ if t_list:
                         
                         if news_table:
                             rows = news_table.findAll('tr')
-                            for row in rows[:7]:  # On prend les 7 premières
-                                text = row.a.get_text()
-                                link = row.a['href']
-                                # Finviz affiche la date différemment, on met une date par défaut 
-                                # ou on l'extrait si besoin pour le tri
-                                all_news.append({
-                                    'timestamp': now,
-                                    'date_visuelle': now.strftime('%d/%m'), # Format JJ/MM identique !
-                                    'titre': text,
-                                    'source': "📊 Finviz (US)",
-                                    'lien': link
-                                })
-                except:
+                            for row in rows[:8]:  # On prend les 8 premières
+                                a_tag = row.find('a')
+                                if a_tag:
+                                    text = a_tag.get_text()
+                                    link = a_tag['href']
+                                    now = datetime.now()
+                                    all_news.append({
+                                        'timestamp': now,
+                                        'date_visuelle': now.strftime('%d/%m'),
+                                        'titre': text,
+                                        'source': "📊 Finviz (US)",
+                                        'lien': link
+                                    })
+
+                        else:
+                            # DEBUG : Décommenter la ligne suivante pour voir si la table est absente
+                            # st.warning(f"Table de news non trouvée sur Finviz pour {t_finviz}")
+                            pass
+                    else:
+                        # DEBUG : Décommenter pour voir si Finviz nous bloque (Erreur 403 ou 404)
+                        # st.error(f"Finviz erreur {response.status_code}")
+                        pass
+                except Exception as e:
+                    # st.error(f"Erreur technique Finviz : {e}")
                     pass
+                              
 
                 # --- 3. Affichage ---
                 if all_news:
