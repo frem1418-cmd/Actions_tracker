@@ -16,7 +16,6 @@ from bs4 import BeautifulSoup
 def get_quick_news(ticker):
     news_list = []
     t_clean = ticker.split('.')[0].upper()
-    from textblob import TextBlob
     
     # --- 1. Google News FR ---
     try:
@@ -36,21 +35,26 @@ def get_quick_news(ticker):
 
     # --- 2. Finviz US ---
     try:
-        h = {'User-Agent': 'Mozilla/5.0'}
-        r = requests.get(f"https://finviz.com/quote.ashx?t={t_clean}", headers=h, timeout=5)
+        session = requests.Session()
+        h = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+        }
+        r = requests.get(f"https://finviz.com/quote.ashx?t={t_clean}", headers=h, timeout=10)
         if r.status_code == 200:
             soup = BeautifulSoup(r.content, 'html.parser')
             table = soup.find(id='news-table')
             if table:
                 last_date = ""
-                for row in table.findAll('tr')[:3]:
+                for row in table.findAll('tr')[:5]:
                     tds = row.findAll('td')
-                    date_text = tds[0].get_text(strip=True)
-                    if " " in date_text:
-                        last_date = date_text.split(' ')[0]
-                        tm = date_text.split(' ')[1]
-                    else:
-                        tm = date_text
+                    if len(tds) < 2: continue
+                    # Gestion de la date Finviz (elle n'est pas répétée sur chaque ligne)
+                    raw_date = tds[0].get_text(strip=True)
+                    if " " in raw_date: # Format: Jan-12 08:00AM
+                        last_date = raw_date.split(' ')[0]
+                        tm = raw_date.split(' ')[1]
+                    else: # Format: 08:00AM (on reprend la dernière date connue)
+                        tm = raw_date
                     
                     t_text = row.a.get_text()
                     t_link = row.a['href']
@@ -58,10 +62,8 @@ def get_quick_news(ticker):
                     icon = "🟢" if pol > 0.1 else "🔴" if pol < -0.1 else "⚪"
                     
                     news_list.append({
-                        'titre': t_text,
-                        'lien': t_link,
-                        'badge': f"{icon} 📊",
-                        'date': f"{last_date} {tm}"
+                        'titre': t_text, 'lien': t_link, 
+                        'badge': f"{icon} 📊", 'date': f"{last_date} {tm}"
                     })
     except: pass
     return news_list
@@ -477,10 +479,12 @@ if t_list:
                             articles = get_quick_news(t) # Ta fonction de l'étape 2
                             if articles:
                                 for a in articles:
-                                    badge = a.get('badge', '⚪')
-                                    titre = a.get('titre', 'Pas de titre')
-                                    lien = a.get('lien', '#')        
-                                    st.markdown(f"{badge} [{titre}]({lien})")                                    
+                                    # 1. On affiche la date en petit gris
+                                    st.caption(f"🕒 {a.get('date', '')}")
+                                    # 2. On affiche le badge et le titre
+                                    st.markdown(f"{a['badge']} [{a['titre']}]({a['lien']})")
+                                    # 3. Une petite ligne de séparation pour la clarté
+                                    st.write("---")                                   
                             else:
                                 st.caption("Aucune news trouvée.")
             else:
