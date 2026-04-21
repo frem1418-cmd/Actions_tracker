@@ -9,7 +9,7 @@ __pycache__/
 
 # Anciennes watchlists locales (fichiers .txt)
 Watchlists/
-*.txt
+#*.txt
 
 # Fichiers système
 .DS_Store
