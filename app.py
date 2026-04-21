@@ -135,7 +135,7 @@ def news_timeline_module(liste_tickers):
         articles = get_quick_news(t)
         for a in articles:
             # On ajoute le nom de l'action au titre pour savoir de qui on parle
-            a['display_title'] = f"**{t}** : {a['titre']}"
+            a['display_title'] = f"**{nom}** ({t}) : : {a['titre']}"
             all_news.append(a)
     
     # 2. On trie tout par date (la plus récente en haut)
@@ -144,7 +144,7 @@ def news_timeline_module(liste_tickers):
     # 3. Affichage
     st.write("---")
     if all_news:
-        for a in all_news[:20]: # On affiche les 20 plus récentes
+        for a in all_news[:50]: # On affiche les 50 plus récentes
             st.markdown(f"{a['badge']} | {a['date']} | [{a['display_title']}]({a['lien']})")
     else:
         st.info("Aucune news disponible.")    
@@ -557,9 +557,9 @@ if t_list:
                 
                 # 2. On appelle la fonction "Fragment" qu'on a créée à l'étape 1
                 # --- SÉLECTEUR DE VUE ---
-                mode_vue = st.radio("Format d'affichage :", ["🏢 Par Action", "⏳ Flux Chronologique"], horizontal=True)
+                mode_vue = st.radio("Format d'affichage :", ["⏳ Flux Chronologique" , "🏢 Par Action"], horizontal=True)
                 
-                if mode_vue == "🏢 Par Action":
+                if mode_vue == "⏳ Flux Chronologique":
                     news_dashboard_module(liste_tickers)
                 else:
                     news_timeline_module(liste_tickers)
