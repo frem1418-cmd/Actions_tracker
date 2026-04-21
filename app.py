@@ -8,6 +8,8 @@ from datetime import datetime
 from textblob import TextBlob
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
+import requests
+from bs4 import BeautifulSoup
 
 # --- 1. CONFIGURATION & DOSSIERS ---
 WATCHLIST_DIR = "watchlists"
@@ -561,25 +563,35 @@ if t_list:
                             'lien': entry.link,
                         })
                 except: pass
-                # --- 2. Récupération Yahoo Finance (International) ---
+                # --- 2. SOURCE ALTERNATIVE : FINVIZ ---
                 try:
-                    t_obj = yf.Ticker(ticker_brut)
-                    news_yahoo = t_obj.news
-                    if news_yahoo:
-                        for n in news_yahoo:
-                            ts = n.get('providerPublishTime')
-                            if ts:
-                                # On convertit le timestamp Yahoo en objet datetime pour le tri
-                                dt_obj = datetime.fromtimestamp(ts)
+                    url_finviz = f"https://finviz.com/quote.ashx?t={ticker_clean}"
+                    # Finviz demande un "User-Agent" pour ne pas bloquer
+                    headers = {'User-Agent': 'Mozilla/5.0'}
+                    response = requests.get(url_finviz, headers=headers, timeout=5)
+                    
+                    if response.status_code == 200:
+                        soup = BeautifulSoup(response.content, 'html.parser')
+                        # On cherche le tableau des news dans la page
+                        news_table = soup.find(id='news-table')
+                        
+                        if news_table:
+                            rows = news_table.findAll('tr')
+                            for row in rows[:7]:  # On prend les 7 premières
+                                text = row.a.get_text()
+                                link = row.a['href']
+                                # Finviz affiche la date différemment, on met une date par défaut 
+                                # ou on l'extrait si besoin pour le tri
                                 all_news.append({
-                                    'timestamp': dt_obj,
-                                    'date_visuelle': dt_obj.strftime('%d/%m'),
-                                    'titre': n.get('title'),
-                                    'source': f"🌎 {n.get('publisher', 'Yahoo')}",
-                                    'lien': n.get('link')
+                                    'timestamp': now,
+                                    'date_visuelle': now.strftime('%d/%m'), # Format JJ/MM identique !
+                                    'titre': text,
+                                    'source': "📊 Finviz (US)",
+                                    'lien': link
                                 })
                 except:
                     pass
+
                 # --- 3. Affichage ---
                 if all_news:
                     # Optionnel : trier par date ici si besoin, 
