@@ -22,7 +22,15 @@ def get_quick_news(ticker):
         url = f"https://news.google.com/rss/search?q={t_clean}+bourse&hl=fr&gl=FR&ceid=FR:fr"
         f = feedparser.parse(url)
         for e in f.entries[:2]:
-            news_list.append({'t': e.title, 'l': e.link, 's': '🇫🇷'})
+            # On calcule le sentiment ici pour avoir le badge
+            pol = TextBlob(e.title).sentiment.polarity
+            icon = "🟢" if pol > 0.1 else "🔴" if pol < -0.1 else "⚪"
+            
+            news_list.append({
+                'titre': e.title, 
+                'lien': e.link, 
+                'badge': f"{icon} 🇫🇷"
+            })
     except: pass
     
     # 2. Finviz US (2 news)
@@ -34,7 +42,17 @@ def get_quick_news(ticker):
             table = soup.find(id='news-table')
             if table:
                 for row in table.findAll('tr')[:2]:
-                    news_list.append({'t': row.a.get_text(), 'l': row.a['href'], 's': '📊'})
+                    t_text = row.a.get_text()
+                    t_link = row.a['href']
+                    
+                    pol = TextBlob(t_text).sentiment.polarity
+                    icon = "🟢" if pol > 0.1 else "🔴" if pol < -0.1 else "⚪"
+                    
+                    news_list.append({
+                        'titre': t_text,
+                        'lien': t_link,
+                        'badge': f"{icon} 📊"
+                    })
     except: pass
     return news_list
 
@@ -448,7 +466,10 @@ if t_list:
                             articles = get_quick_news(t) # Ta fonction de l'étape 2
                             if articles:
                                 for a in articles:
-                                    st.markdown(f"{a['badge']} [{a['titre']}]({a['lien']})")
+                                    badge = a.get('badge', '⚪')
+                                    titre = a.get('titre', 'Pas de titre')
+                                    lien = a.get('lien', '#')        
+                                    st.markdown(f"{badge} [{titre}]({lien})")                                    
                             else:
                                 st.caption("Aucune news trouvée.")
             else:
