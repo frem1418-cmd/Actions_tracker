@@ -494,6 +494,8 @@ with st.sidebar:
                 save_watchlist_gsheets(new_name, "AAPL")
                 st.success(f"'{new_name}' Liste créée !")
                 st.cache_data.clear()
+                import time
+                time.sleep(0.5)
                 st.rerun()
             else:
                 st.error("Nom vide !")
