@@ -477,7 +477,8 @@ with st.sidebar:
         if st.button("Confirmer Création", use_container_width=True):
             if new_name:
                 save_watchlist_gsheets(new_name, "AAPL")
-                st.success(f"'{new_name}' créée !")
+                st.success(f"'{new_name}' Liste créée !")
+                st.cache_data.clear()
                 st.rerun()
             else:
                 st.error("Nom vide !")
@@ -572,7 +573,7 @@ if t_list:
         
         # 1. Message d'avertissement si aucune donnée n'est récupérée (ex: problème Yahoo ou tickers invalides)
         if not data_res:
-            st.warning("⚠️ Trop de requettes ou les tickers sont invalides. Réessayez dans quelques minutes.")
+            st.warning("⚠️ Trop de requettes envoyées ou les tickers sont invalides. Réessayez dans quelques minutes.")
             st.stop() # Cette ligne magique arrête le code ici SI data_res est vide
         # ------------------------
     
