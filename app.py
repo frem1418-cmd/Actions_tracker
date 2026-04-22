@@ -601,11 +601,6 @@ if t_list:
         # ------------------------
     
     df = pd.DataFrame(data_res)    
-    with st.sidebar:
-        st.divider()
-        csv = df.drop(columns=['p_details', 'full_data']).to_csv(index=False, sep=';', encoding='utf-8-sig')
-        st.download_button("📥 Télécharger CSV", data=csv, file_name=f"Watchlist_{sel_list}.csv")
-
     # --- GESTION DES COLONNES VIA GOOGLE SHEETS ---
     try:
         # 1. Lecture de l'onglet de configuration
