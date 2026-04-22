@@ -417,9 +417,11 @@ def save_watchlist_gsheets(list_name, tickers_text):
 
 # --- FONCTION DE GESTION DE LA MISE À JOUR APRÈS ÉDITION MANUELLE ---
 def on_list_change():
-    # 1. On vide la mémoire de la zone d'édition
+    # On vide le cache GSheets
+    st.cache_data.clear()
+    # On force le nettoyage de la mémoire de l'éditeur
     if "ticker_editor" in st.session_state:
-        del st.session_state["ticker_editor"]
+        st.session_state.ticker_editor = load_watchlist_gsheets(st.session_state.sel_list)
     
     # 2. On vide le cache pour forcer la relecture du Sheets
     st.cache_data.clear()
@@ -562,6 +564,9 @@ with st.sidebar:
     st.divider()
     # --- ÉTAPE B : ÉDITER (Automatique via Ctrl+Entrée) ---
     current_content = load_watchlist_gsheets(sel_list)
+    # 2. Si la mémoire est vide ou si on vient de changer, on force la synchro
+    if "ticker_editor" not in st.session_state:
+        st.session_state["ticker_editor"] = current_content
 
     tickers_input = st.text_area(
         "Éditer les tickers :", 
