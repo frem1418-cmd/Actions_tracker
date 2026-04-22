@@ -820,14 +820,22 @@ if t_list:
                 st.subheader("📰 Dernières Actualités")
 
                 all_news = []
-                ticker_brut = d.get('Ticker', 'AAPL')
-                ticker_clean = ticker_brut.split('.')[0].upper()
+                # 1. RÉCUPÉRATION VRAIMENT FIABLE DU TICKER ET DU NOM
+                # On vérifie d'abord dans 'd', sinon on utilise une variable de secours
+                ticker_selectionne = d.get('Ticker') or d.get('ticker') or str(ticker_clean)
+                nom_selectionne = d.get('Nom') or d.get('nom') or ticker_selectionne
 
+                # On nettoie pour Google et Finviz
+                t_clean = str(ticker_selectionne).split('.')[0].upper()
+                n_clean = str(nom_selectionne).replace(" S.A.", "").replace(" SA", "").replace(" Inc", "")
+
+                # --- DEBUG TEMPORAIRE (A supprimer quand ça marche) ---
+                st.write(f"Recherche en cours pour : {t_clean} ({n_clean})")
                 # RÉCUPÉRATION DU NOM : On essaie de prendre le nom dans le dictionnaire 'd'
                 # Si 'Nom' n'existe pas, on utilise le Ticker par défaut
                 nom_action = d.get('Nom', ticker_clean)
                 
-                             
+                            
                # --- 1. RÉCUPÉRATION GOOGLE NEWS (FR) ---
                 try:
                     # Nettoyage du nom pour la recherche
@@ -835,20 +843,11 @@ if t_list:
                     #url_fr = f"https://news.google.com/rss/search?q={ticker_clean}+bourse+when:7d&hl=fr&gl=FR&ceid=FR:fr"
                     url_fr = f"https://news.google.com/rss/search?q={nom_pour_recherche}+bourse+when:7d&hl=fr&gl=FR&ceid=FR:fr"
                     feed = feedparser.parse(url_fr)
-                    short_name = nom_pour_recherche.split(' ')[0].upper().replace(",", "")
-                    clean_t = ticker_clean.split('.')[0].upper()
-                    st.write(f"DEBUG: Recherche {short_name} ou {clean_t}")
+
                     for entry in feed.entries:
                         title_upper = entry.title.upper()
-                        
-                        # 1. On définit nos mots-clés de secours
-                        # On prend le premier mot du nom (ex: 'MercadoLibre')
-                        short_name = nom_pour_recherche.split(' ')[0].upper().replace(",", "")
-                        # On prend le ticker sans le suffixe (ex: 'MELI')
-                        clean_t = ticker_clean.split('.')[0].upper()
-
-                        # 2. On accepte si l'un des deux est présent
-                        if short_name in title_upper or clean_t in title_upper:
+                        # On vérifie si le nom est bien dans le titre (évite les news globales)
+                        if nom_pour_recherche.upper() in title_upper:
                             dt_obj = datetime(*entry.published_parsed[:6])
                             all_news.append({
                                 'timestamp': dt_obj,
