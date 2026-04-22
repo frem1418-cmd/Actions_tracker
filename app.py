@@ -866,13 +866,24 @@ if t_list:
                                     text = a_tag.get_text()
                                     link = a_tag['href']
                                     now = datetime.now()
-                                    all_news.append({
-                                        'timestamp': now,
-                                        'date_visuelle': now.strftime('%d/%m'),
-                                        'titre': text,
-                                        'source': "📊 Finviz (US)",
-                                        'lien': link
-                                    })
+                                    # On vérifie si le ticker (ex: MSFT) est dans le titre 
+                                    # OU si une partie du nom de l'action s'y trouve
+                                    is_relevant = False
+                                    if t_finviz.lower() in text.lower():
+                                        is_relevant = True
+                                    # Tu peux ajouter des mots-clés exclus (ex: éviter les pubs)
+                                    blacklist = ["sponsored", "promo", "deal of the day"]
+                                    if any(word in text.lower() for word in blacklist):
+                                        is_relevant = False
+                                    if is_relevant:
+                                        now = datetime.now()
+                                        all_news.append({
+                                            'timestamp': now,
+                                            'date_visuelle': now.strftime('%d/%m'),
+                                            'titre': text,
+                                            'source': "📊 Finviz (US)",
+                                            'lien': link
+                                        })
 
                         else:
                             # DEBUG : Décommenter la ligne suivante pour voir si la table est absente
