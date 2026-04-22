@@ -173,19 +173,7 @@ def load_watchlist_sheets(watchlist_name):
         return ""
 
 # --- 1. CONFIGURATION & DOSSIERS ---
-WATCHLIST_DIR = "watchlists"
 COLUMNS_FILE = "columns_config.txt"
-
-# Création propre du dossier
-if not os.path.exists(WATCHLIST_DIR):
-    os.makedirs(WATCHLIST_DIR)
-
-# On ne crée rien automatiquement, ou alors on crée un fichier "Ma Liste.txt" 
-# seulement si le dossier est TOTALEMENT absent (pas seulement vide)
-if not os.path.exists(WATCHLIST_DIR):
-    os.makedirs(WATCHLIST_DIR)
-    with open(os.path.join(WATCHLIST_DIR, "Ma Liste.txt"), "w", encoding="utf-8") as f:
-        f.write("AAPL")
 
 # --- 2. RÉFÉRENTIELS ---
 SECTORS_FR = {
@@ -356,12 +344,6 @@ def get_all_watchlists():
         # En cas d'erreur (ex: pas de connexion), on renvoie une liste par défaut
         return ["Portefeuille Principal"]
 
-def load_watchlist(name):
-    path = os.path.join(WATCHLIST_DIR, f"{name}.txt")
-    if os.path.exists(path):
-        with open(path, "r", encoding="utf-8") as f:
-            return f.read()
-    return ""
 
 def delete_watchlist_gsheets(watchlist_name):
     # 1. Connexion à Google Sheets
