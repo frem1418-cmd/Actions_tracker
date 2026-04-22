@@ -363,6 +363,21 @@ def load_watchlist(name):
             return f.read()
     return ""
 
+def delete_watchlist_gsheets(watchlist_name):
+    # 1. Connexion à Google Sheets
+    conn = st.connection("gsheets", type=GSheetsConnection)
+    
+    # 2. Lecture des données actuelles
+    df = conn.read(worksheet="Watchlists")
+    
+    # 3. On garde toutes les lignes SAUF celle qu'on veut supprimer
+    df_updated = df[df['Wallet_Name'] != watchlist_name]
+    
+    # 4. On écrase le Sheets avec le nouveau DataFrame
+    conn.update(worksheet="Watchlists", data=df_updated)
+    
+    # 5. On vide le cache pour que la liste disparaisse du menu
+    st.cache_data.clear()
 
 def load_columns(all_cols):
     if os.path.exists(COLUMNS_FILE):
@@ -483,29 +498,34 @@ with st.sidebar:
             else:
                 st.error("Nom vide !")
 
-    # Logique de Suppression
+    # Logic de Suppression (Version Google Sheets)
     if show_del:
         st.warning(f"⚠️ Action irréversible")
         list_to_del = st.selectbox("Choisir la liste à supprimer :", lists, key="del_select_box")
         
-        # On ajoute une clé unique au bouton de suppression
         if st.button(f"Confirmer la suppression de {list_to_del}", type="primary", key="btn_confirm_del"):
             if len(lists) > 1:
-                # Utilise bien le nom du dossier défini en haut de ton script
-                filepath = os.path.join("watchlists", f"{list_to_del}.txt")
-                
-                if os.path.exists(filepath):
-                    try:
-                        os.remove(filepath)
-                        st.success(f"🔥 Liste '{list_to_del}' supprimée avec succès !")
-                        # Pause d'une demi-seconde pour laisser l'utilisateur voir le message
-                        import time
-                        time.sleep(0.5)
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Erreur lors de la suppression : {e}")
-                else:
-                    st.error(f"Fichier introuvable : {filepath}")
+                try:
+                    # 1. Connexion et lecture
+                    conn = st.connection("gsheets", type=GSheetsConnection)
+                    df_all = conn.read(worksheet="Watchlists")
+                    
+                    # 2. Suppression de la ligne (on garde tout SAUF list_to_del)
+                    df_updated = df_all[df_all['Wallet_Name'] != list_to_del]
+                    
+                    # 3. Mise à jour sur Google Sheets
+                    conn.update(worksheet="Watchlists", data=df_updated)
+                    
+                    # 4. Message et rafraîchissement
+                    st.success(f"🔥 Liste '{list_to_del}' supprimée avec succès !")
+                    st.cache_data.clear() # TRÈS IMPORTANT
+                    
+                    import time
+                    time.sleep(0.5)
+                    st.rerun()
+                    
+                except Exception as e:
+                    st.error(f"Erreur lors de la suppression : {e}")
             else:
                 st.error("🚫 Impossible de supprimer la dernière liste !")
 
