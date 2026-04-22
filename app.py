@@ -827,13 +827,12 @@ if t_list:
                 # Si 'Nom' n'existe pas, on utilise le Ticker par défaut
                 nom_action = d.get('Nom', ticker_clean)
                 
-                # Nettoyage du nom pour la recherche Google
-                #nom_pour_recherche = nom_action.replace(" SA", "").replace(" Inc", "").replace(" Corp", "").replace(", Inc.", "")
-             
+                            
                # --- 1. RÉCUPÉRATION GOOGLE NEWS (FR) ---
                 try:
                     # Nettoyage du nom pour la recherche
-                    nom_pour_recherche = nom_action.replace(" SA", "").replace(" Inc", "").replace(" Corp", "")
+                    #nom_pour_recherche = nom_action.replace(" SA", "").replace(" Inc", "").replace(" Corp", "")
+                    nom_pour_recherche = nom_action
                     #url_fr = f"https://news.google.com/rss/search?q={ticker_clean}+bourse+when:7d&hl=fr&gl=FR&ceid=FR:fr"
                     url_fr = f"https://news.google.com/rss/search?q={nom_pour_recherche}+bourse+when:7d&hl=fr&gl=FR&ceid=FR:fr"
                     feed = feedparser.parse(url_fr)
