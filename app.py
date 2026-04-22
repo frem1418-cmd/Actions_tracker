@@ -821,7 +821,7 @@ if t_list:
                 ticker_brut = d.get('Ticker', 'AAPL')
                 ticker_clean = ticker_brut.split('.')[0].upper()
                 all_news = []
-                # 1. RÉCUPÉRATION FIABLE DES IDENTIFIANTS
+                
                 # On récupère le ticker et le nom depuis le dictionnaire 'd'
                 t_brut = d.get('Ticker') or d.get('ticker') or "AAPL"
                 n_brut = d.get('Nom') or d.get('nom') or t_brut
@@ -830,6 +830,14 @@ if t_list:
                 t_clean = str(t_brut).split('.')[0].upper()
                 n_clean = str(n_brut).replace(" S.A.", "").replace(" SA", "").replace(" Inc", "").replace(", Inc.", "")
                 
+                # --- DÉFINITION de  LA BLACKLIST GLOBALE ---
+                # Ces mots indiquent souvent des pubs, des listes d'actions ou du contenu robotisé
+                blacklist = [
+                    "SPONSORED", "PROMO", "DEAL OF THE DAY", "TOP 10", "WEEKLY ROUNDUP", 
+                    "LISTE D'ACTIONS", "SÉLECTION", "PANIER", "MEILLEURES ACTIONS",
+                    "TRADING BOT", "YIELD", "CRYPTO", "FOREX"
+                ]
+
                 # --- 1. RÉCUPÉRATION GOOGLE NEWS (FR) ---
                 try:
                     # On utilise le nom simplifié pour la recherche
@@ -839,19 +847,31 @@ if t_list:
 
                     for entry in feed.entries:
                         title_upper = entry.title.upper()
-                        
-                        # Filtrage : On accepte si le nom court OU le ticker est présent
-                        if query_name.upper() in title_upper or t_clean in title_upper:
-                            dt_obj = datetime(*entry.published_parsed[:6])
-                            all_news.append({
-                                'timestamp': dt_obj,
-                                'date_visuelle': dt_obj.strftime('%d/%m'),
-                                'titre': entry.title,
-                                'source': f"🇫🇷 {entry.source.get('title', 'Google')}",
-                                'lien': entry.link,
-                            })
+                    
+                    # 1. Vérification de la pertinence (Nom ou Ticker)
+                    is_relevant = (query_name.upper() in title_upper) or (t_clean in title_upper)
+                    
+                    # 2. Filtrage par Blacklist (Pubs, Listes, etc.)
+                    if is_relevant and any(word in title_upper for word in blacklist):
+                        is_relevant = False
+                    
+                    # 3. FILTRE ANTI-BRUIT (Nouveau) : Éviter les articles qui citent trop d'actions
+                    # Si un titre contient trop de virgules ou de symboles '$', c'est souvent une liste de cours
+                    if is_relevant and (title_upper.count(',') > 3 or title_upper.count('$') > 2):
+                        is_relevant = False
+
+                    # 4. Ajout final si toujours valide
+                    if is_relevant:
+                        dt_obj = datetime(*entry.published_parsed[:6])
+                        all_news.append({
+                            'timestamp': dt_obj,
+                            'date_visuelle': dt_obj.strftime('%d/%m'),
+                            'titre': entry.title,
+                            'source': f"🇫🇷 {entry.source.get('title', 'Google')}",
+                            'lien': entry.link,
+                        })
                 except Exception as e:
-                    print(f"Erreur Google News pour {t_clean}: {e}") # Corrigé ici
+                    print(f"Erreur Google News pour {t_clean}: {e}")
 
                 # --- 2. SOURCE ALTERNATIVE : FINVIZ (US) ---
                 try:
@@ -868,15 +888,17 @@ if t_list:
                                 if a_tag:
                                     text = a_tag.get_text()
                                     if t_clean in text.upper():
-                                        all_news.append({
-                                            'timestamp': datetime.now(),
-                                            'date_visuelle': datetime.now().strftime('%d/%m'),
-                                            'titre': text,
-                                            'source': "🇺🇸 Finviz",
-                                            'lien': a_tag['href'],
-                                        })
+                                        # Vérification blacklist pour Finviz aussi
+                                       if not any(word in text.upper() for word in blacklist):
+                                            all_news.append({
+                                                'timestamp': datetime.now(),
+                                                'date_visuelle': datetime.now().strftime('%d/%m'),
+                                                'titre': text,
+                                                'source': "🇺🇸 Finviz",
+                                                'lien': a_tag['href'],
+                                            })
                 except Exception as e:
-                    print(f"Erreur Finviz pour {t_clean}: {e}") # Corrigé ici
+                    print(f"Erreur Finviz pour {t_clean}: {e}")
                 
                             
 
