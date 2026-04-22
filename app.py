@@ -605,7 +605,7 @@ if t_list:
         st.divider()
         csv = df.drop(columns=['p_details', 'full_data']).to_csv(index=False, sep=';', encoding='utf-8-sig')
         st.download_button("📥 Télécharger CSV", data=csv, file_name=f"Watchlist_{sel_list}.csv")
-        
+
     # --- GESTION DES COLONNES VIA GOOGLE SHEETS ---
     try:
         # 1. Lecture de l'onglet de configuration
@@ -648,13 +648,7 @@ if t_list:
     # On prépare la configuration "pinned" pour Streamlit
     config_colonnes = {col: st.column_config.Column(pinned=True) for col in selection_figee}
 
-    st.dataframe(
-        df[selection_finale],
-        use_container_width=True,
-        hide_index=True,
-        column_config=config_colonnes
-    )
-
+    
     def style_df(df):
         styles = pd.DataFrame('', index=df.index, columns=df.columns)
         
