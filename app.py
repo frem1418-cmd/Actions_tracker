@@ -455,9 +455,20 @@ with st.sidebar:
             sel_opt = st.selectbox("Résultats :", opt)
             tk_add = sug[opt.index(sel_opt)]['symbol']
             if st.button(f"➕ Ajouter {tk_add}"):
+                # 1. On récupère l'existant sur GSheets
                 cur_tk = load_watchlist_gsheets(st.session_state.get('sel_list', 'Portefeuille Principal'))
-                save_watchlist_gsheets(st.session_state.get('sel_list', 'Portefeuille Principal'), (cur_tk + f", {tk_add}") if cur_tk else tk_add)
-                st.cache_data.clear() # On vide la mémoire pour forcer la relecture de GSheets
+                
+                # 2. On prépare la nouvelle chaîne
+                new_tickers_list = cur_tk + f", {tk_add}"
+                
+                # 3. SAUVEGARDE GOOGLE SHEETS
+                save_watchlist_gsheets(st.session_state.get('sel_list', 'Portefeuille Principal'), new_tickers_list)
+                
+                # 4. MISE À JOUR DE LA MÉMOIRE DE LA ZONE DE TEXTE (La clé du problème)
+                st.session_state["ticker_editor"] = new_tickers_list
+                
+                # 5. ON VIDE LE CACHE ET ON RELANCE
+                st.cache_data.clear()
                 st.rerun()
 
     st.divider()
