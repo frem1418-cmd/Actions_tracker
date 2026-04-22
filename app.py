@@ -827,20 +827,26 @@ if t_list:
                 # Si 'Nom' n'existe pas, on utilise le Ticker par défaut
                 nom_action = d.get('Nom', ticker_clean)
                 
-                            
+                             
                # --- 1. RÉCUPÉRATION GOOGLE NEWS (FR) ---
                 try:
                     # Nettoyage du nom pour la recherche
-                    #nom_pour_recherche = nom_action.replace(" SA", "").replace(" Inc", "").replace(" Corp", "")
-                    nom_pour_recherche = nom_action
+                    nom_pour_recherche = nom_action.replace(" SA", "").replace(" Inc", "").replace(" Corp", "")
                     #url_fr = f"https://news.google.com/rss/search?q={ticker_clean}+bourse+when:7d&hl=fr&gl=FR&ceid=FR:fr"
                     url_fr = f"https://news.google.com/rss/search?q={nom_pour_recherche}+bourse+when:7d&hl=fr&gl=FR&ceid=FR:fr"
                     feed = feedparser.parse(url_fr)
 
                     for entry in feed.entries:
                         title_upper = entry.title.upper()
-                        # On vérifie si le nom est bien dans le titre (évite les news globales)
-                        if nom_pour_recherche.upper() in title_upper:
+                        
+                        # 1. On définit nos mots-clés de secours
+                        # On prend le premier mot du nom (ex: 'MercadoLibre')
+                        short_name = nom_pour_recherche.split(' ')[0].upper().replace(",", "")
+                        # On prend le ticker sans le suffixe (ex: 'MELI')
+                        clean_t = ticker_clean.split('.')[0].upper()
+
+                        # 2. On accepte si l'un des deux est présent
+                        if short_name in title_upper or clean_t in title_upper:
                             dt_obj = datetime(*entry.published_parsed[:6])
                             all_news.append({
                                 'timestamp': dt_obj,
