@@ -866,12 +866,19 @@ if t_list:
                                     text = a_tag.get_text()
                                     link = a_tag['href']
                                     now = datetime.now()
-                                    # On vérifie si le ticker (ex: MSFT) est dans le titre 
-                                    # OU si une partie du nom de l'action s'y trouve
-                                    is_relevant = False
-                                    if t_finviz.lower() in text.lower():
+                                    # --- FILTRAGE STRICT PAR TICKER ---
+                                    text_upper = text.upper()
+                                    # On définit des patterns précis pour éviter les faux positifs
+                                    ticker_patterns = [f"({t_finviz})", f" {t_finviz} ", f"${t_finviz}", f"{t_finviz}:"]
+                                    
+                                    # On vérifie si l'un des patterns est présent
+                                    is_relevant = any(p in text_upper for p in ticker_patterns)
+                                    
+                                    # Optionnel : On peut aussi accepter si le ticker est au tout début du titre
+                                    if text_upper.startswith(t_finviz):
                                         is_relevant = True
-                                    # Tu peux ajouter des mots-clés exclus (ex: éviter les pubs)
+
+                                    # On garde la blacklist pour les pubs
                                     blacklist = ["sponsored", "promo", "deal of the day"]
                                     if any(word in text.lower() for word in blacklist):
                                         is_relevant = False
