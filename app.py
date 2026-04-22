@@ -828,7 +828,7 @@ if t_list:
                 nom_action = d.get('Nom', ticker_clean)
                 
                 # Nettoyage du nom pour la recherche Google
-                nom_pour_recherche = nom_action.replace(" SA", "").replace(" Inc", "").replace(" Corp", "").replace(", Inc.", "")
+                #nom_pour_recherche = nom_action.replace(" SA", "").replace(" Inc", "").replace(" Corp", "").replace(", Inc.", "")
              
                # --- 1. RÉCUPÉRATION GOOGLE NEWS (FR) ---
                 try:
