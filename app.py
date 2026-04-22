@@ -564,314 +564,315 @@ st.title(f"📈 {sel_list}")
 t_list = [t.strip().upper() for t in tickers_input.replace('\r', '').replace('\n', ',').split(',') if t.strip()]
 
 if t_list:
-# REMPLACEMENT DES LIGNES 211-213
     data_res = []
     for t in t_list:
         res = fetch_stock_data(t)
         if res:
             data_res.append(res)
-
-# On vérifie si on a réussi à récupérer des données pour au moins un ticker
-if not data_res:
-    st.warning("⚠️ Trop de réquettes envoyées ou les tickers sont invalides. Réessayez dans quelques minutes.")
-else:
-    df = pd.DataFrame(data_res)
+        
+        # 1. Message d'avertissement si aucune donnée n'est récupérée (ex: problème Yahoo ou tickers invalides)
+        if not data_res:
+            st.warning("⚠️ Trop de requettes ou les tickers sont invalides. Réessayez dans quelques minutes.")
+            st.stop() # Cette ligne magique arrête le code ici SI data_res est vide
+        # ------------------------
+    
+    df = pd.DataFrame(data_res)    
     with st.sidebar:
-            st.divider()
-            csv = df.drop(columns=['p_details', 'full_data']).to_csv(index=False, sep=';', encoding='utf-8-sig')
-            st.download_button("📥 Télécharger CSV", data=csv, file_name=f"Watchlist_{sel_list}.csv")
+        st.divider()
+        csv = df.drop(columns=['p_details', 'full_data']).to_csv(index=False, sep=';', encoding='utf-8-sig')
+        st.download_button("📥 Télécharger CSV", data=csv, file_name=f"Watchlist_{sel_list}.csv")
 
-            def style_df(df):
-                styles = pd.DataFrame('', index=df.index, columns=df.columns)
+    def style_df(df):
+        styles = pd.DataFrame('', index=df.index, columns=df.columns)
+        
+        # --- COLORATION DES CASES ---
+        if 'Prix Actuel' in df.columns:
+            p_actuel = df['Prix Actuel']
+            
+            # Entrées individuelles (Vert si > Prix)
+            for col in [ 'Entrée FCF -15%', 'Entrée BNA -15%','Entrée Analystes -15%']:
+                if col in df.columns:
+                    mask = df[col].fillna(0) > p_actuel
+                    styles.loc[mask, col] = 'background-color: #d4edda; color: #155724;'
+
+            # Entrée Synthèse (Vert si > Prix + Mise en avant)
+            if 'Entrée Synthèse (-15%)' in df.columns:
+                mask_synth = df['Entrée Synthèse (-15%)'] > p_actuel
+                # Style de base pour la colonne (Bordure et gras)
+                styles['Entrée Synthèse (-15%)'] = 'border-left: 2px solid #555; border-right: 2px solid #555; font-weight: bold;'
+                # Coloration si signal achat
+                styles.loc[mask_synth, 'Entrée Synthèse (-15%)'] += 'background-color: #28a745; color: white;'
+
+        # --- COLORATION PIOTROSKI ---
+        if 'Santé (Piotroski)' in df.columns:
+            for i, v in df['Santé (Piotroski)'].items():
+                try:
+                    s = int(str(v).split('/')[0])
+                    if s >= 4: styles.loc[i, 'Santé (Piotroski)'] += 'color: #28a745; font-weight: bold;'
+                    elif s <= 1: styles.loc[i, 'Santé (Piotroski)'] += 'color: #dc3545; font-weight: bold;'
+                except: pass
+        # --- COLORATION DES PERFORMANCES ---
+        for col in ['Chg 1J', 'Chg 1M', 'Chg YTD']:
+            if col in df.columns:
+                # On cherche le signe + ou - dans le texte (car ce sont des strings avec emojis)
+                mask_plus = df[col].astype(str).str.contains('\+')
+                mask_moins = df[col].astype(str).str.contains('-')
                 
-                # --- COLORATION DES CASES ---
-                if 'Prix Actuel' in df.columns:
-                    p_actuel = df['Prix Actuel']
+                # On applique les couleurs (Vert pour +, Rouge pour -)
+                styles.loc[mask_plus, col] += 'color: #28a745; font-weight: bold;'
+                styles.loc[mask_moins, col] += 'color: #dc3545; font-weight: bold;'
+        return styles
+    if show_news_portfolio:
+        # 1. MODE REVUE DE PRESSE (S'affiche à la place du tableau)
+        st.subheader(f"🗞️ Revue de Presse : {sel_list}")
                     
-                    # Entrées individuelles (Vert si > Prix)
-                    for col in [ 'Entrée FCF -15%', 'Entrée BNA -15%','Entrée Analystes -15%']:
-                        if col in df.columns:
-                            mask = df[col].fillna(0) > p_actuel
-                            styles.loc[mask, col] = 'background-color: #d4edda; color: #155724;'
-
-                    # Entrée Synthèse (Vert si > Prix + Mise en avant)
-                    if 'Entrée Synthèse (-15%)' in df.columns:
-                        mask_synth = df['Entrée Synthèse (-15%)'] > p_actuel
-                        # Style de base pour la colonne (Bordure et gras)
-                        styles['Entrée Synthèse (-15%)'] = 'border-left: 2px solid #555; border-right: 2px solid #555; font-weight: bold;'
-                        # Coloration si signal achat
-                        styles.loc[mask_synth, 'Entrée Synthèse (-15%)'] += 'background-color: #28a745; color: white;'
-
-                # --- COLORATION PIOTROSKI ---
-                if 'Santé (Piotroski)' in df.columns:
-                    for i, v in df['Santé (Piotroski)'].items():
-                        try:
-                            s = int(str(v).split('/')[0])
-                            if s >= 4: styles.loc[i, 'Santé (Piotroski)'] += 'color: #28a745; font-weight: bold;'
-                            elif s <= 1: styles.loc[i, 'Santé (Piotroski)'] += 'color: #dc3545; font-weight: bold;'
-                        except: pass
-                # --- COLORATION DES PERFORMANCES ---
-                for col in ['Chg 1J', 'Chg 1M', 'Chg YTD']:
-                    if col in df.columns:
-                        # On cherche le signe + ou - dans le texte (car ce sont des strings avec emojis)
-                        mask_plus = df[col].astype(str).str.contains('\+')
-                        mask_moins = df[col].astype(str).str.contains('-')
-                        
-                        # On applique les couleurs (Vert pour +, Rouge pour -)
-                        styles.loc[mask_plus, col] += 'color: #28a745; font-weight: bold;'
-                        styles.loc[mask_moins, col] += 'color: #dc3545; font-weight: bold;'
-                return styles
-            if show_news_portfolio:
-                # 1. MODE REVUE DE PRESSE (S'affiche à la place du tableau)
-                st.subheader(f"🗞️ Revue de Presse : {sel_list}")
-                            
-                if tickers_input:
-                    # 1. On prépare la liste à partir de l'input
-                    liste_tickers = [t.strip().upper() for t in tickers_input.split(',') if t.strip()]
-                    
-                    # 2. On appelle la fonction "Fragment" qu'on a créée à l'étape 1
-                    # --- SÉLECTEUR DE VUE ---
-                    mode_vue = st.radio("", ["⏳ Flux Chronologique" , "🏢 Par Action"], horizontal=True)
-                    
-                    if mode_vue == "⏳ Flux Chronologique":
-                        news_timeline_module(liste_tickers)
-                    else:
-                        news_dashboard_module(liste_tickers)
-                        
-                else:
-                    st.info("La liste de tickers est vide.")
+        if tickers_input:
+            # 1. On prépare la liste à partir de l'input
+            liste_tickers = [t.strip().upper() for t in tickers_input.split(',') if t.strip()]
+            
+            # 2. On appelle la fonction "Fragment" qu'on a créée à l'étape 1
+            # --- SÉLECTEUR DE VUE ---
+            mode_vue = st.radio("", ["⏳ Flux Chronologique" , "🏢 Par Action"], horizontal=True)
+            
+            if mode_vue == "⏳ Flux Chronologique":
+                news_timeline_module(liste_tickers)
             else:
-                sel = st.dataframe(
-                    df[["Ticker"] + sel_cols].style.apply(style_df, axis=None).format(formatter=lambda x: clean_num(x) if isinstance(x, (int, float)) else x),
-                    on_select="rerun", selection_mode="single-row", use_container_width=True, hide_index=True, height="content"
-                )
+                news_dashboard_module(liste_tickers)
+                
+        else:
+            st.info("La liste de tickers est vide.")
+    else:
+        sel = st.dataframe(
+            df[["Ticker"] + sel_cols].style.apply(style_df, axis=None).format(formatter=lambda x: clean_num(x) if isinstance(x, (int, float)) else x),
+            on_select="rerun", selection_mode="single-row", use_container_width=True, hide_index=True, height="content"
+        )
 
-                if sel.selection and sel.selection.rows:
-                    d = data_res[sel.selection.rows[0]]
-                    fd = d['full_data']
-                    st.divider()
+        if sel.selection and sel.selection.rows:
+            d = data_res[sel.selection.rows[0]]
+            fd = d['full_data']
+            st.divider()
+            
+            c1, c2 = st.columns([2, 1])
+            with c1:
+                st.header(f"🏢 {d['Nom']} ({d['Ticker']})")
+                st.subheader("🏥 Diagnostic Santé Financière")
+                grid = st.columns(5)
+                for i, (label, info) in enumerate(d['p_details'].items()):
+                    with grid[i]:
+                        txt_c = info.get('comparaison', '')
+                        col_v = "#28a745" if "+" in txt_c else ("#dc3545" if "-" in txt_c else "#555")
+                        st.markdown(f"""
+                        <div title="{EXPLICATIONS.get(label, '')}" style='background:#f8f9fa; padding:10px; border-radius:10px; text-align:center; border:1px solid #ddd; height:180px; cursor:help; display:flex; flex-direction:column; justify-content:center;'>
+                            <div style='font-weight:bold; color:#555; font-size:0.8em; margin-bottom:5px;'>{label} ℹ️</div>
+                            <div style='font-size:1em; font-weight:bold;'>{info.get('detail', 'N/A')}</div>
+                            <div style='font-size:0.75em; color:{col_v}; font-weight:bold; background:white; padding:3px; border-radius:4px; border:1px solid #eee; margin: 5px 0;'>{txt_c}</div>
+                            <div style='font-size:1.4em;'>{'✅' if info.get('status') else '❌'}</div>
+                        </div>
+                        """, unsafe_allow_html=True)
+                # --- SECTION GRAPHIQUE ---
+                # --- SECTION GRAPHIQUE AVANCÉ (PRIX + VOLUME) ---
+                st.divider()
+                st.subheader(f"📈 Performance & Volumes (YTD)")
+                
+                try:
                     
-                    c1, c2 = st.columns([2, 1])
-                    with c1:
-                        st.header(f"🏢 {d['Nom']} ({d['Ticker']})")
-                        st.subheader("🏥 Diagnostic Santé Financière")
-                        grid = st.columns(5)
-                        for i, (label, info) in enumerate(d['p_details'].items()):
-                            with grid[i]:
-                                txt_c = info.get('comparaison', '')
-                                col_v = "#28a745" if "+" in txt_c else ("#dc3545" if "-" in txt_c else "#555")
-                                st.markdown(f"""
-                                <div title="{EXPLICATIONS.get(label, '')}" style='background:#f8f9fa; padding:10px; border-radius:10px; text-align:center; border:1px solid #ddd; height:180px; cursor:help; display:flex; flex-direction:column; justify-content:center;'>
-                                    <div style='font-weight:bold; color:#555; font-size:0.8em; margin-bottom:5px;'>{label} ℹ️</div>
-                                    <div style='font-size:1em; font-weight:bold;'>{info.get('detail', 'N/A')}</div>
-                                    <div style='font-size:0.75em; color:{col_v}; font-weight:bold; background:white; padding:3px; border-radius:4px; border:1px solid #eee; margin: 5px 0;'>{txt_c}</div>
-                                    <div style='font-size:1.4em;'>{'✅' if info.get('status') else '❌'}</div>
-                                </div>
-                                """, unsafe_allow_html=True)
-                        # --- SECTION GRAPHIQUE ---
-                        # --- SECTION GRAPHIQUE AVANCÉ (PRIX + VOLUME) ---
-                        st.divider()
-                        st.subheader(f"📈 Performance & Volumes (YTD)")
+                    
+                    s_obj = yf.Ticker(d['Ticker'])
+                    current_yr = datetime.now().year
+                    
+                    # Récupération historique pour calcul MA50
+                    from datetime import timedelta
+                    date_debut_calcul = (datetime(current_yr, 1, 1) - timedelta(days=100)).strftime('%Y-%m-%d')
+                    h_data_large = s_obj.history(start=date_debut_calcul)
+
+                    if not h_data_large.empty:
+                        h_data_large['MA50'] = h_data_large['Close'].rolling(window=50).mean()
+                        h_data = h_data_large[h_data_large.index >= f"{current_yr}-01-01"]
+
+                        # --- 1. CALCUL COULEUR VOLUME (Vert si hausse, Rouge si baisse) ---
+                        colors = ['#28a745' if row['Close'] >= row['Open'] else '#dc3545' 
+                                for _, row in h_data.iterrows()]
+
+                        fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+                        # Courbe du prix
+                        fig.add_trace(go.Scatter(x=h_data.index, y=h_data['Close'], name="Prix", line=dict(color='#28a745', width=2)), secondary_y=False)
                         
-                        try:
-                            
-                            
-                            s_obj = yf.Ticker(d['Ticker'])
-                            current_yr = datetime.now().year
-                            
-                            # Récupération historique pour calcul MA50
-                            from datetime import timedelta
-                            date_debut_calcul = (datetime(current_yr, 1, 1) - timedelta(days=100)).strftime('%Y-%m-%d')
-                            h_data_large = s_obj.history(start=date_debut_calcul)
+                        # MA50
+                        fig.add_trace(go.Scatter(x=h_data.index, y=h_data['MA50'], name="MA50", line=dict(color='orange', dash='dot')), secondary_y=False)
 
-                            if not h_data_large.empty:
-                                h_data_large['MA50'] = h_data_large['Close'].rolling(window=50).mean()
-                                h_data = h_data_large[h_data_large.index >= f"{current_yr}-01-01"]
+                        # Volumes colorés
+                        fig.add_trace(go.Bar(x=h_data.index, y=h_data['Volume'], name="Volume", marker_color=colors, opacity=0.3), secondary_y=True)
 
-                                # --- 1. CALCUL COULEUR VOLUME (Vert si hausse, Rouge si baisse) ---
-                                colors = ['#28a745' if row['Close'] >= row['Open'] else '#dc3545' 
-                                        for _, row in h_data.iterrows()]
-
-                                fig = make_subplots(specs=[[{"secondary_y": True}]])
-
-                                # Courbe du prix
-                                fig.add_trace(go.Scatter(x=h_data.index, y=h_data['Close'], name="Prix", line=dict(color='#28a745', width=2)), secondary_y=False)
-                                
-                                # MA50
-                                fig.add_trace(go.Scatter(x=h_data.index, y=h_data['MA50'], name="MA50", line=dict(color='orange', dash='dot')), secondary_y=False)
-
-                                # Volumes colorés
-                                fig.add_trace(go.Bar(x=h_data.index, y=h_data['Volume'], name="Volume", marker_color=colors, opacity=0.3), secondary_y=True)
-
-                                # --- 2. TRACÉ DES LIGNES HORIZONTALES ---
-                                prix_actuel = d['Prix Actuel']
-                                # Ligne Prix Actuel
-                                fig.add_hline(y=prix_actuel, line_dash="dash", line_color="gray", 
-                                            annotation_text=f"Actuel: {prix_actuel}", annotation_position="bottom right")
-                                
-                                # Ligne Zone d'Achat (-15%)
-                                prix_achat = prix_actuel * 0.85
-                                fig.add_hline(y=prix_achat, line_dash="dot", line_color="#28a745", 
-                                            annotation_text="Zone d'achat (-15%)", annotation_position="top left")
-
-                                # Mise en forme
-                                # On récupère le nom et le ticker pour le titre
-                                nom_action = d.get('Nom', 'Action')
-                                ticker_action = d.get('Ticker', '')
-                                fig.update_layout(
-                                    title={
-                                        'text': f" {nom_action} ({ticker_action})",
-                                        'y': 0.95,
-                                        'x': 0.5,
-                                        'xanchor': 'center',
-                                        'yanchor': 'top',
-                                        'font': {'size': 20}
-                                    },
-                                    height=450, margin=dict(l=0, r=0, t=30, b=0), hovermode="x unified", template="plotly_white")
-                                fig.update_yaxes(title_text="Prix", secondary_y=False, showgrid=True, gridcolor='lightgray', fixedrange=False)
-                                fig.update_yaxes(title_text="Volume", secondary_y=True, showgrid=False, fixedrange=False)
-
-                                st.plotly_chart(fig, use_container_width=True,
-                                                config={
-                                                    'scrollZoom': True,        # Active la roulette
-                                                    'displayModeBar': True, 
-                                                    'editable': True,  # Affiche la barre d'outils en haut à droite
-                                                    'modeBarButtonsToAdd': [
-                                                        'drawline',     # Tracer des lignes droites
-                                                        'drawrect',     # Tracer des zones (rectangles)
-                                                        'eraseshape'    # Gomme pour effacer tes tracés
-                                                    ],
-                                                    'displaylogo': False       # Enlève le logo Plotly
-                                                    }
-                                )
-                            else:
-                                st.info("Données non disponibles.")
-                        except Exception as e:
-                            st.error("Installez plotly pour voir ce graphique : pip install plotly")
-
-                        st.divider()
-                        st.subheader("🏆 Modèles de Valorisation")
-                        v_configs = [
-                            ("1️⃣ Modèle BNA (Forward)", fd['val_bna'], f"BNA Fwd ({clean_num(fd['eps_fwd'])}) × PER Fwd ({fd['per_fwd']})"),
-                            ("2️⃣ Modèle FCF (Moyen)", fd['val_fcf'], f"(FCF/Action {clean_num(fd['fcf_ps'])}) × 1.05 × PER Fwd"),
-                            ("3️⃣ Analystes", fd['target_mean'], f"Moyenne de {fd['num_analysts']} opinions")
-                        ]
-                        for title, val, formula in v_configs:
-                            if val > 0:
-                                with st.expander(f"{title} : {clean_num(val)} {fd['currency']}", expanded=True):
-                                    st.caption(f"Calcul : {formula}")
-                                    m1, m2, m3, m4 = st.columns(4)
-                                    m1.metric("Juste Prix", clean_num(val))
-                                    m2.metric("-10%", clean_num(val*0.9))
-                                    m3.metric("-12%", clean_num(val*0.88))
-                                    m4.metric("-15%", clean_num(val*0.85))
-                    with c2:
-                        st.metric("Prix Actuel", f"{clean_num(d['Prix Actuel'])} {fd['currency']}")
-                        st.markdown(f"<div style='background:#28a745; color:white; padding:25px; border-radius:15px; text-align:center;'><small>ENTRÉE CONSEILLÉE (-15%)</small><br/><span style='font-size:36px; font-weight:bold;'>{clean_num(fd['fair_avg']*0.85)}</span></div>", unsafe_allow_html=True)
-                        st.divider()
-                        st.write(f"**Dividende :** {clean_num(d['Dividende (€/$)'])} {fd['currency']} ({d['Rendement %']}%)")
-                        st.write(f"**Détachement :** {d['Date Détachement']}")
-                        st.write(f"**Avis :** {d['Avis Analystes']} | **Secteur :** {d['Secteur']}")
-
-                        # --- BLOC NEWS SÉCURISÉ ---
-                        st.divider()
-                        st.subheader("📰 Dernières Actualités")
-
-                        all_news = []
-                        ticker_brut = d.get('Ticker', 'AAPL')
-                        ticker_clean = ticker_brut.split('.')[0]
-
-                        # --- 1. Récupération Google News (FR) ---
+                        # --- 2. TRACÉ DES LIGNES HORIZONTALES ---
+                        prix_actuel = d['Prix Actuel']
+                        # Ligne Prix Actuel
+                        fig.add_hline(y=prix_actuel, line_dash="dash", line_color="gray", 
+                                    annotation_text=f"Actuel: {prix_actuel}", annotation_position="bottom right")
                         
-                        try:
-                            
-                            # 2. Construction de l'URL Google News (recherche sur 7 jours en français)
-                            url_fr = f"https://news.google.com/rss/search?q={ticker_clean}+bourse+when:7d&hl=fr&gl=FR&ceid=FR:fr"
-                            
-                            # 3. Lecture du flux avec feedparser
-                            feed = feedparser.parse(url_fr)
-                            
-                            for entry in feed.entries:
-                                # On crée un objet datetime pour pouvoir trier
-                                dt_obj = datetime(*entry.published_parsed[:6])
-                                all_news.append({
-                                    'timestamp': dt_obj,
-                                    'date_visuelle': dt_obj.strftime('%d/%m'),
-                                    'titre': entry.title,
-                                    'source': f"🇫🇷 {entry.source.get('title', 'Google')}",
-                                    'lien': entry.link,
-                                })
-                        except: pass
-                        # --- 2. SOURCE ALTERNATIVE : FINVIZ ---
-                        try:
-                            # 1. On force le ticker en MAJUSCULES et on enlève le .PA ou .nx
-                            t_finviz = ticker_clean.upper().split('.')[0]
-                            url_finviz = f"https://finviz.com/quote.ashx?t={t_finviz}"
-                            # Finviz demande un "User-Agent" pour ne pas bloquer
-                            headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
-                            response = requests.get(url_finviz, headers=headers, timeout=10)
-                            
-                            if response.status_code == 200:
-                                soup = BeautifulSoup(response.content, 'html.parser')
-                                # On cherche le tableau des news dans la page
-                                news_table = soup.find(id='news-table')
-                                
-                                if news_table:
-                                    rows = news_table.findAll('tr')
-                                    for row in rows[:8]:  # On prend les 8 premières
-                                        a_tag = row.find('a')
-                                        if a_tag:
-                                            text = a_tag.get_text()
-                                            link = a_tag['href']
-                                            now = datetime.now()
-                                            all_news.append({
-                                                'timestamp': now,
-                                                'date_visuelle': now.strftime('%d/%m'),
-                                                'titre': text,
-                                                'source': "📊 Finviz (US)",
-                                                'lien': link
-                                            })
+                        # Ligne Zone d'Achat (-15%)
+                        prix_achat = prix_actuel * 0.85
+                        fig.add_hline(y=prix_achat, line_dash="dot", line_color="#28a745", 
+                                    annotation_text="Zone d'achat (-15%)", annotation_position="top left")
 
-                                else:
-                                    # DEBUG : Décommenter la ligne suivante pour voir si la table est absente
-                                    # st.warning(f"Table de news non trouvée sur Finviz pour {t_finviz}")
-                                    pass
-                            else:
-                                # DEBUG : Décommenter pour voir si Finviz nous bloque (Erreur 403 ou 404)
-                                # st.error(f"Finviz erreur {response.status_code}")
-                                pass
-                        except Exception as e:
-                            # st.error(f"Erreur technique Finviz : {e}")
-                            pass
-                                    
+                        # Mise en forme
+                        # On récupère le nom et le ticker pour le titre
+                        nom_action = d.get('Nom', 'Action')
+                        ticker_action = d.get('Ticker', '')
+                        fig.update_layout(
+                            title={
+                                'text': f" {nom_action} ({ticker_action})",
+                                'y': 0.95,
+                                'x': 0.5,
+                                'xanchor': 'center',
+                                'yanchor': 'top',
+                                'font': {'size': 20}
+                            },
+                            height=450, margin=dict(l=0, r=0, t=30, b=0), hovermode="x unified", template="plotly_white")
+                        fig.update_yaxes(title_text="Prix", secondary_y=False, showgrid=True, gridcolor='lightgray', fixedrange=False)
+                        fig.update_yaxes(title_text="Volume", secondary_y=True, showgrid=False, fixedrange=False)
 
-                        # --- 3. Affichage ---
-                        # --- 3. TRI ET AFFICHAGE AVEC ANALYSE DE SENTIMENT ---
-                        if all_news:
-                            all_news.sort(key=lambda x: x['timestamp'], reverse=True)
-                            
-                            for article in all_news[:12]:
-                                # Analyse de sentiment avec TextBlob
-                                analysis = TextBlob(article['titre'])
-                                polarity = analysis.sentiment.polarity  # Score entre -1 et 1
-                                
-                                # Définition de l'emoji et de la couleur selon le score
-                                if polarity > 0.1:
-                                    sentiment_icon = "🟢"  # Positif
-                                    sentiment_label = "Bullish"
-                                elif polarity < -0.1:
-                                    sentiment_icon = "🔴"  # Négatif
-                                    sentiment_label = "Bearish"
-                                else:
-                                    sentiment_icon = "⚪"  # Neutre
-                                    sentiment_label = "Neutre"
+                        st.plotly_chart(fig, use_container_width=True,
+                                        config={
+                                            'scrollZoom': True,        # Active la roulette
+                                            'displayModeBar': True, 
+                                            'editable': True,  # Affiche la barre d'outils en haut à droite
+                                            'modeBarButtonsToAdd': [
+                                                'drawline',     # Tracer des lignes droites
+                                                'drawrect',     # Tracer des zones (rectangles)
+                                                'eraseshape'    # Gomme pour effacer tes tracés
+                                            ],
+                                            'displaylogo': False       # Enlève le logo Plotly
+                                            }
+                        )
+                    else:
+                        st.info("Données non disponibles.")
+                except Exception as e:
+                    st.error("Installez plotly pour voir ce graphique : pip install plotly")
 
-                                # Affichage du label avec le sentiment
-                                label = f"{sentiment_icon} **{article['date_visuelle']}** | {article['titre']}"
-                                
-                                with st.expander(label):
-                                    st.write(f"**Source :** {article['source']}")
-                                    st.write(f"**Sentiment :** {sentiment_label} (Score: {round(polarity, 2)})")
-                                    st.link_button("Lire l'article", article['lien'])
+                st.divider()
+                st.subheader("🏆 Modèles de Valorisation")
+                v_configs = [
+                    ("1️⃣ Modèle BNA (Forward)", fd['val_bna'], f"BNA Fwd ({clean_num(fd['eps_fwd'])}) × PER Fwd ({fd['per_fwd']})"),
+                    ("2️⃣ Modèle FCF (Moyen)", fd['val_fcf'], f"(FCF/Action {clean_num(fd['fcf_ps'])}) × 1.05 × PER Fwd"),
+                    ("3️⃣ Analystes", fd['target_mean'], f"Moyenne de {fd['num_analysts']} opinions")
+                ]
+                for title, val, formula in v_configs:
+                    if val > 0:
+                        with st.expander(f"{title} : {clean_num(val)} {fd['currency']}", expanded=True):
+                            st.caption(f"Calcul : {formula}")
+                            m1, m2, m3, m4 = st.columns(4)
+                            m1.metric("Juste Prix", clean_num(val))
+                            m2.metric("-10%", clean_num(val*0.9))
+                            m3.metric("-12%", clean_num(val*0.88))
+                            m4.metric("-15%", clean_num(val*0.85))
+            with c2:
+                st.metric("Prix Actuel", f"{clean_num(d['Prix Actuel'])} {fd['currency']}")
+                st.markdown(f"<div style='background:#28a745; color:white; padding:25px; border-radius:15px; text-align:center;'><small>ENTRÉE CONSEILLÉE (-15%)</small><br/><span style='font-size:36px; font-weight:bold;'>{clean_num(fd['fair_avg']*0.85)}</span></div>", unsafe_allow_html=True)
+                st.divider()
+                st.write(f"**Dividende :** {clean_num(d['Dividende (€/$)'])} {fd['currency']} ({d['Rendement %']}%)")
+                st.write(f"**Détachement :** {d['Date Détachement']}")
+                st.write(f"**Avis :** {d['Avis Analystes']} | **Secteur :** {d['Secteur']}")
+
+                # --- BLOC NEWS SÉCURISÉ ---
+                st.divider()
+                st.subheader("📰 Dernières Actualités")
+
+                all_news = []
+                ticker_brut = d.get('Ticker', 'AAPL')
+                ticker_clean = ticker_brut.split('.')[0]
+
+                # --- 1. Récupération Google News (FR) ---
+                
+                try:
+                    
+                    # 2. Construction de l'URL Google News (recherche sur 7 jours en français)
+                    url_fr = f"https://news.google.com/rss/search?q={ticker_clean}+bourse+when:7d&hl=fr&gl=FR&ceid=FR:fr"
+                    
+                    # 3. Lecture du flux avec feedparser
+                    feed = feedparser.parse(url_fr)
+                    
+                    for entry in feed.entries:
+                        # On crée un objet datetime pour pouvoir trier
+                        dt_obj = datetime(*entry.published_parsed[:6])
+                        all_news.append({
+                            'timestamp': dt_obj,
+                            'date_visuelle': dt_obj.strftime('%d/%m'),
+                            'titre': entry.title,
+                            'source': f"🇫🇷 {entry.source.get('title', 'Google')}",
+                            'lien': entry.link,
+                        })
+                except: pass
+                # --- 2. SOURCE ALTERNATIVE : FINVIZ ---
+                try:
+                    # 1. On force le ticker en MAJUSCULES et on enlève le .PA ou .nx
+                    t_finviz = ticker_clean.upper().split('.')[0]
+                    url_finviz = f"https://finviz.com/quote.ashx?t={t_finviz}"
+                    # Finviz demande un "User-Agent" pour ne pas bloquer
+                    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+                    response = requests.get(url_finviz, headers=headers, timeout=10)
+                    
+                    if response.status_code == 200:
+                        soup = BeautifulSoup(response.content, 'html.parser')
+                        # On cherche le tableau des news dans la page
+                        news_table = soup.find(id='news-table')
+                        
+                        if news_table:
+                            rows = news_table.findAll('tr')
+                            for row in rows[:8]:  # On prend les 8 premières
+                                a_tag = row.find('a')
+                                if a_tag:
+                                    text = a_tag.get_text()
+                                    link = a_tag['href']
+                                    now = datetime.now()
+                                    all_news.append({
+                                        'timestamp': now,
+                                        'date_visuelle': now.strftime('%d/%m'),
+                                        'titre': text,
+                                        'source': "📊 Finviz (US)",
+                                        'lien': link
+                                    })
+
                         else:
-                            st.info(f"ℹ️ Aucune actualité récente disponible pour {ticker_clean}.")
+                            # DEBUG : Décommenter la ligne suivante pour voir si la table est absente
+                            # st.warning(f"Table de news non trouvée sur Finviz pour {t_finviz}")
+                            pass
+                    else:
+                        # DEBUG : Décommenter pour voir si Finviz nous bloque (Erreur 403 ou 404)
+                        # st.error(f"Finviz erreur {response.status_code}")
+                        pass
+                except Exception as e:
+                    # st.error(f"Erreur technique Finviz : {e}")
+                    pass
+                            
+
+                # --- 3. Affichage ---
+                # --- 3. TRI ET AFFICHAGE AVEC ANALYSE DE SENTIMENT ---
+                if all_news:
+                    all_news.sort(key=lambda x: x['timestamp'], reverse=True)
+                    
+                    for article in all_news[:12]:
+                        # Analyse de sentiment avec TextBlob
+                        analysis = TextBlob(article['titre'])
+                        polarity = analysis.sentiment.polarity  # Score entre -1 et 1
+                        
+                        # Définition de l'emoji et de la couleur selon le score
+                        if polarity > 0.1:
+                            sentiment_icon = "🟢"  # Positif
+                            sentiment_label = "Bullish"
+                        elif polarity < -0.1:
+                            sentiment_icon = "🔴"  # Négatif
+                            sentiment_label = "Bearish"
+                        else:
+                            sentiment_icon = "⚪"  # Neutre
+                            sentiment_label = "Neutre"
+
+                        # Affichage du label avec le sentiment
+                        label = f"{sentiment_icon} **{article['date_visuelle']}** | {article['titre']}"
+                        
+                        with st.expander(label):
+                            st.write(f"**Source :** {article['source']}")
+                            st.write(f"**Sentiment :** {sentiment_label} (Score: {round(polarity, 2)})")
+                            st.link_button("Lire l'article", article['lien'])
+                else:
+                    st.info(f"ℹ️ Aucune actualité récente disponible pour {ticker_clean}.")
