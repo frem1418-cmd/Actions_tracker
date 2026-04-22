@@ -171,7 +171,15 @@ def load_watchlist_sheets(watchlist_name):
     except Exception as e:
         st.error(f"Erreur Sheets: {e}")
         return ""
-
+    
+# --- FONCTION DE SAUVEGARDE DES WATCHLISTS VERS GOOGLE SHEETS ---    
+def update_tickers_callback():
+    # On récupère le texte saisi dans le text_area via sa clé
+    new_val = st.session_state["ticker_editor"].upper()
+    # On sauvegarde dans GSheets
+    save_watchlist_gsheets(sel_list, new_val)
+    # On vide le cache pour que le tableau se mette à jour avec les nouveaux cours
+    st.cache_data.clear()
 # --- 1. CONFIGURATION & DOSSIERS ---
 COLUMNS_FILE = "columns_config.txt"
 
@@ -449,6 +457,7 @@ with st.sidebar:
             if st.button(f"➕ Ajouter {tk_add}"):
                 cur_tk = load_watchlist_gsheets(st.session_state.get('sel_list', 'Portefeuille Principal'))
                 save_watchlist_gsheets(st.session_state.get('sel_list', 'Portefeuille Principal'), (cur_tk + f", {tk_add}") if cur_tk else tk_add)
+                st.cache_data.clear() # On vide la mémoire pour forcer la relecture de GSheets
                 st.rerun()
 
     st.divider()
@@ -531,14 +540,16 @@ with st.sidebar:
         st.markdown("📰 **Actualités**", help="Afficher les Actualités du portefeuille")
     
     st.divider()
-    # --- ÉTAPE B : ÉDITER & SAUVEGARDER (Ton code actuel) ---
-    # On charge le contenu de la liste sélectionnée
+    # --- ÉTAPE B : ÉDITER (Automatique via Ctrl+Entrée) ---
     current_content = load_watchlist_gsheets(sel_list)
 
-    tickers_input = st.text_area("Éditer les tickers :", value=current_content, height=100).upper()
-    if st.button("💾 Sauver Liste"): 
-        save_watchlist_gsheets(sel_list, tickers_input)
-        st.rerun() # Pour rafraîchir l'affichage immédiatement
+    tickers_input = st.text_area(
+        "Éditer les tickers :", 
+        value=current_content, 
+        height=100, 
+        key="ticker_editor",           # Identifiant pour la fonction
+        on_change=update_tickers_callback # La fonction qui s'exécute au Ctrl+Entrée
+    ).upper()
     st.divider()   
     cols_all = ["Nom", "Secteur", "Prix Actuel", "BNA Actuel", "PER Actuel", "BNA Forward", "PER Forward", 
                 "Entrée BNA -15%", "Entrée FCF -15%", "Entrée Analystes -15%", "Entrée Synthèse (-15%)", 
