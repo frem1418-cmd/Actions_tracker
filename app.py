@@ -710,10 +710,13 @@ if t_list:
             st.info("La liste de tickers est vide.")
     else:
         sel = st.dataframe(
-            df[["Ticker"] + selection_finale].style.apply(style_df, axis=None).format(formatter=lambda x: clean_num(x) if isinstance(x, (int, float)) else x),
-            on_select="rerun", selection_mode="single-row", use_container_width=True, hide_index=True, height="content"
+            df[selection_finale].style.apply(style_df, axis=None).format(formatter=lambda x: clean_num(x) if isinstance(x, (int, float)) else x),
+            on_select="rerun",
+            selection_mode="single-row",
+            use_container_width=True,
+            hide_index=True,
+            column_config=config_colonnes 
         )
-
         if sel.selection and sel.selection.rows:
             d = data_res[sel.selection.rows[0]]
             fd = d['full_data']
