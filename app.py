@@ -830,7 +830,7 @@ if t_list:
                 n_clean = str(nom_selectionne).replace(" S.A.", "").replace(" SA", "").replace(" Inc", "")
 
                 # --- DEBUG TEMPORAIRE (A supprimer quand ça marche) ---
-                st.write(f"Recherche en cours pour : {t_clean} ({n_clean})")
+                # st.write(f"Recherche en cours pour : {t_clean} ({n_clean})")
                 # RÉCUPÉRATION DU NOM : On essaie de prendre le nom dans le dictionnaire 'd'
                 # Si 'Nom' n'existe pas, on utilise le Ticker par défaut
                 nom_action = d.get('Nom', ticker_clean)
