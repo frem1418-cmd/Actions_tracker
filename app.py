@@ -511,7 +511,7 @@ with st.sidebar:
                     df_all = conn.read(worksheet="Watchlists")
                     
                     # 2. Suppression de la ligne (on garde tout SAUF list_to_del)
-                    df_updated = df_all[df_all['Wallet_Name'] != list_to_del]
+                    df_updated = df_all[df_all['list_name'] != list_to_del]
                     
                     # 3. Mise à jour sur Google Sheets
                     conn.update(worksheet="Watchlists", data=df_updated)
