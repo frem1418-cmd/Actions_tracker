@@ -821,7 +821,14 @@ if t_list:
 
                 all_news = []
                 ticker_brut = d.get('Ticker', 'AAPL')
-                ticker_clean = ticker_brut.split('.')[0]
+                ticker_clean = ticker_brut.split('.')[0].upper()
+
+                # RÉCUPÉRATION DU NOM : On essaie de prendre le nom dans le dictionnaire 'd'
+                # Si 'Nom' n'existe pas, on utilise le Ticker par défaut
+                nom_action = d.get('Nom', ticker_clean)
+                
+                # Nettoyage du nom pour la recherche Google
+                nom_pour_recherche = nom_action.replace(" SA", "").replace(" Inc", "").replace(" Corp", "").replace(", Inc.", "")
              
                # --- 1. RÉCUPÉRATION GOOGLE NEWS (FR) ---
                 try:
