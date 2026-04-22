@@ -13,6 +13,8 @@ from bs4 import BeautifulSoup
 import streamlit as st
 from streamlit_gsheets import GSheetsConnection
 
+# Initialisation de la connexion (à faire une seule fois)
+conn = st.connection("gsheets", type=GSheetsConnection)
 
 #Fonction pour récupérer les news et analyser le sentiment
 def get_quick_news(ticker):
@@ -584,57 +586,6 @@ st.title(f"📈 {sel_list}")
 # Cette ligne est "blindée" contre les espaces, les sauts de ligne et les minuscules
 t_list = [t.strip().upper() for t in tickers_input.replace('\r', '').replace('\n', ',').split(',') if t.strip()]
 
-# --- GESTION DES COLONNES VIA GOOGLE SHEETS ---
-try:
-    # 1. Lecture de l'onglet de configuration
-    df_conf = conn.read(worksheet="Choix_colonnes")
-    
-    # 2. Sélecteur de Profil dans la barre latérale
-    liste_profils = sorted(df_conf['Profil'].unique().tolist())
-    profil_choisi = st.sidebar.selectbox("📋 Vue de tableau", options=liste_profils)
-
-    # 3. On filtre les réglages pour ce profil précis
-    config_active = df_conf[df_conf['Profil'] == profil_choisi]
-    
-    # On récupère les colonnes "cochées" dans le Sheet
-    cols_base = config_active[config_active['Afficher'] == True]['Nom_Colonne'].tolist()
-    cols_figees_base = config_active[config_active['Figer'] == True]['Nom_Colonne'].tolist()
-
-except Exception as e:
-    st.error(f"Erreur configuration colonnes : {e}")
-    cols_base, cols_figees_base = ["Ticker", "Nom"], ["Ticker"]
-
-# --- 4. ENRICHISSEMENT ET MODIFICATION DYNAMIQUE ---
-with st.expander("🛠️ Personnaliser les colonnes affichées"):
-    # On permet d'ajouter n'importe quelle colonne du DF principal
-    toutes_les_cols = df.columns.tolist()
-    
-    selection_finale = st.multiselect(
-        "Colonnes actives :",
-        options=toutes_les_cols,
-        default=[c for c in cols_base if c in toutes_les_cols]
-    )
-    
-    # On permet de modifier quelles colonnes sont figées
-    selection_figee = st.multiselect(
-        "Colonnes à figer à gauche :",
-        options=selection_finale,
-        default=[c for c in cols_figees_base if c in selection_finale]
-    )
-
-# --- 5. AFFICHAGE FINAL ---
-# On prépare la configuration "pinned" pour Streamlit
-config_colonnes = {col: st.column_config.Column(pinned=True) for col in selection_figee}
-
-st.dataframe(
-    df[selection_finale],
-    use_container_width=True,
-    hide_index=True,
-    column_config=config_colonnes
-)
-
-
-
 
 if t_list:
     data_res = []
@@ -654,6 +605,55 @@ if t_list:
         st.divider()
         csv = df.drop(columns=['p_details', 'full_data']).to_csv(index=False, sep=';', encoding='utf-8-sig')
         st.download_button("📥 Télécharger CSV", data=csv, file_name=f"Watchlist_{sel_list}.csv")
+        
+    # --- GESTION DES COLONNES VIA GOOGLE SHEETS ---
+    try:
+        # 1. Lecture de l'onglet de configuration
+        df_conf = conn.read(worksheet="Choix_colonnes")
+        
+        # 2. Sélecteur de Profil dans la barre latérale
+        liste_profils = sorted(df_conf['Profil'].unique().tolist())
+        profil_choisi = st.sidebar.selectbox("📋 Vue de tableau", options=liste_profils)
+
+        # 3. On filtre les réglages pour ce profil précis
+        config_active = df_conf[df_conf['Profil'] == profil_choisi]
+        
+        # On récupère les colonnes "cochées" dans le Sheet
+        cols_base = config_active[config_active['Afficher'] == True]['Nom_Colonne'].tolist()
+        cols_figees_base = config_active[config_active['Figer'] == True]['Nom_Colonne'].tolist()
+
+    except Exception as e:
+        st.error(f"Erreur configuration colonnes : {e}")
+        cols_base, cols_figees_base = ["Ticker", "Nom"], ["Ticker"]
+
+    # --- 4. ENRICHISSEMENT ET MODIFICATION DYNAMIQUE ---
+    with st.expander("🛠️ Personnaliser les colonnes affichées"):
+        # On permet d'ajouter n'importe quelle colonne du DF principal
+        toutes_les_cols = df.columns.tolist()
+        
+        selection_finale = st.multiselect(
+            "Colonnes actives :",
+            options=toutes_les_cols,
+            default=[c for c in cols_base if c in toutes_les_cols]
+        )
+        
+        # On permet de modifier quelles colonnes sont figées
+        selection_figee = st.multiselect(
+            "Colonnes à figer à gauche :",
+            options=selection_finale,
+            default=[c for c in cols_figees_base if c in selection_finale]
+        )
+
+    # --- 5. AFFICHAGE FINAL ---
+    # On prépare la configuration "pinned" pour Streamlit
+    config_colonnes = {col: st.column_config.Column(pinned=True) for col in selection_figee}
+
+    st.dataframe(
+        df[selection_finale],
+        use_container_width=True,
+        hide_index=True,
+        column_config=config_colonnes
+    )
 
     def style_df(df):
         styles = pd.DataFrame('', index=df.index, columns=df.columns)
@@ -716,7 +716,7 @@ if t_list:
             st.info("La liste de tickers est vide.")
     else:
         sel = st.dataframe(
-            df[["Ticker"] + sel_cols].style.apply(style_df, axis=None).format(formatter=lambda x: clean_num(x) if isinstance(x, (int, float)) else x),
+            df[["Ticker"] + selection_finale].style.apply(style_df, axis=None).format(formatter=lambda x: clean_num(x) if isinstance(x, (int, float)) else x),
             on_select="rerun", selection_mode="single-row", use_container_width=True, hide_index=True, height="content"
         )
 
@@ -964,4 +964,5 @@ if t_list:
                             st.link_button("Lire l'article", article['lien'])
                 else:
                     st.info(f"ℹ️ Aucune actualité récente disponible pour {ticker_clean}: {e}.")
+
 
