@@ -313,7 +313,7 @@ def fetch_stock_data(ticker_str):
 
         # 2. Une seule fonction de formatage
         def fmt_p(v):
-            return f"{'📈' if v > 0 else '📉'} {v:+.2f}%"
+            return f"{v:+.2f}% {'📈' if v > 0 else '📉'}"
             
         # 3. Extraction de la devise (indispensable pour ton PDF et tes metrics)
         curr_raw = info.get('currency', 'EUR')
