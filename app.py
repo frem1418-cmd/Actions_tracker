@@ -822,87 +822,61 @@ if t_list:
                 all_news = []
                 ticker_brut = d.get('Ticker', 'AAPL')
                 ticker_clean = ticker_brut.split('.')[0]
-
-                # --- 1. Récupération Google News (FR) ---
-                
+             
+               # --- 1. RÉCUPÉRATION GOOGLE NEWS (FR) ---
                 try:
-                    
-                    # 2. Construction de l'URL Google News (recherche sur 7 jours en français)
-                    url_fr = f"https://news.google.com/rss/search?q={ticker_clean}+bourse+when:7d&hl=fr&gl=FR&ceid=FR:fr"
-                    
-                    # 3. Lecture du flux avec feedparser
+                    # Nettoyage du nom pour la recherche
+                    nom_pour_recherche = nom_action.replace(" SA", "").replace(" Inc", "").replace(" Corp", "")
+                    #url_fr = f"https://news.google.com/rss/search?q={ticker_clean}+bourse+when:7d&hl=fr&gl=FR&ceid=FR:fr"
+                    url_fr = f"https://news.google.com/rss/search?q={nom_pour_recherche}+bourse+when:7d&hl=fr&gl=FR&ceid=FR:fr"
                     feed = feedparser.parse(url_fr)
-                    
+
                     for entry in feed.entries:
-                        # On crée un objet datetime pour pouvoir trier
-                        dt_obj = datetime(*entry.published_parsed[:6])
-                        all_news.append({
-                            'timestamp': dt_obj,
-                            'date_visuelle': dt_obj.strftime('%d/%m'),
-                            'titre': entry.title,
-                            'source': f"🇫🇷 {entry.source.get('title', 'Google')}",
-                            'lien': entry.link,
-                        })
-                except: pass
-                # --- 2. SOURCE ALTERNATIVE : FINVIZ ---
+                        title_upper = entry.title.upper()
+                        # On vérifie si le nom est bien dans le titre (évite les news globales)
+                        if nom_pour_recherche.upper() in title_upper:
+                            dt_obj = datetime(*entry.published_parsed[:6])
+                            all_news.append({
+                                'timestamp': dt_obj,
+                                'date_visuelle': dt_obj.strftime('%d/%m'),
+                                'titre': entry.title,
+                                'source': f"🇫🇷 {entry.source.get('title', 'Google')}",
+                                'lien': entry.link,
+                            })
+                except Exception as e:
+                    print(f"Erreur Google News pour {ticker_clean}: {e}")
+
+                # --- 2. SOURCE ALTERNATIVE : FINVIZ (US) ---
                 try:
-                    # 1. On force le ticker en MAJUSCULES et on enlève le .PA ou .nx
                     t_finviz = ticker_clean.upper().split('.')[0]
                     url_finviz = f"https://finviz.com/quote.ashx?t={t_finviz}"
-                    # Finviz demande un "User-Agent" pour ne pas bloquer
-                    headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+                    headers = {'User-Agent': 'Mozilla/5.0'}
                     response = requests.get(url_finviz, headers=headers, timeout=10)
-                    
+
                     if response.status_code == 200:
                         soup = BeautifulSoup(response.content, 'html.parser')
-                        # On cherche le tableau des news dans la page
                         news_table = soup.find(id='news-table')
-                        
+
                         if news_table:
                             rows = news_table.findAll('tr')
-                            for row in rows[:8]:  # On prend les 8 premières
+                            for row in rows[:10]: # On analyse les 10 premières
                                 a_tag = row.find('a')
                                 if a_tag:
                                     text = a_tag.get_text()
-                                    link = a_tag['href']
-                                    now = datetime.now()
-                                    # --- FILTRAGE STRICT PAR TICKER ---
                                     text_upper = text.upper()
-                                    # On définit des patterns précis pour éviter les faux positifs
-                                    ticker_patterns = [f"({t_finviz})", f" {t_finviz} ", f"${t_finviz}", f"{t_finviz}:"]
                                     
-                                    # On vérifie si l'un des patterns est présent
-                                    is_relevant = any(p in text_upper for p in ticker_patterns)
-                                    
-                                    # Optionnel : On peut aussi accepter si le ticker est au tout début du titre
-                                    if text_upper.startswith(t_finviz):
-                                        is_relevant = True
-
-                                    # On garde la blacklist pour les pubs
-                                    blacklist = ["sponsored", "promo", "deal of the day"]
-                                    if any(word in text.lower() for word in blacklist):
-                                        is_relevant = False
-                                    if is_relevant:
-                                        now = datetime.now()
+                                    # FILTRAGE STRICT : Le ticker doit être mentionné explicitement
+                                    patterns = [f"({t_finviz})", f" {t_finviz} ", f"${t_finviz}", f"{t_finviz}:"]
+                                    if any(p in text_upper for p in patterns) or text_upper.startswith(t_finviz):
                                         all_news.append({
-                                            'timestamp': now,
-                                            'date_visuelle': now.strftime('%d/%m'),
+                                            'timestamp': datetime.now(),
+                                            'date_visuelle': datetime.now().strftime('%d/%m'),
                                             'titre': text,
-                                            'source': "📊 Finviz (US)",
-                                            'lien': link
+                                            'source': "🇺🇸 Finviz",
+                                            'lien': a_tag['href'],
                                         })
-
-                        else:
-                            # DEBUG : Décommenter la ligne suivante pour voir si la table est absente
-                            # st.warning(f"Table de news non trouvée sur Finviz pour {t_finviz}")
-                            pass
-                    else:
-                        # DEBUG : Décommenter pour voir si Finviz nous bloque (Erreur 403 ou 404)
-                        # st.error(f"Finviz erreur {response.status_code}")
-                        pass
                 except Exception as e:
-                    # st.error(f"Erreur technique Finviz : {e}")
-                    pass
+                    print(f"Erreur Finviz pour {ticker_clean}: {e}")
                             
 
                 # --- 3. Affichage ---
@@ -934,4 +908,4 @@ if t_list:
                             st.write(f"**Sentiment :** {sentiment_label} (Score: {round(polarity, 2)})")
                             st.link_button("Lire l'article", article['lien'])
                 else:
-                    st.info(f"ℹ️ Aucune actualité récente disponible pour {ticker_clean}.")
+                    st.info(f"ℹ️ Aucune actualité récente disponible pour {ticker_clean}: {e}.")
