@@ -411,9 +411,18 @@ def save_watchlist_gsheets(list_name, tickers_text):
             df = pd.concat([df, new_row], ignore_index=True)
             
         conn.update(worksheet="Watchlists", data=df)
-        st.success(f"✅ Liste '{list_name}' synchronisée sur Google Sheets !")
+        st.success(f"✅ Liste '{list_name}' synchronisée !")
     except Exception as e:
         st.error(f"Erreur de sauvegarde : {e}")
+
+# --- FONCTION DE GESTION DE LA MISE À JOUR APRÈS ÉDITION MANUELLE ---
+def on_list_change():
+    # 1. On vide la mémoire de la zone d'édition
+    if "ticker_editor" in st.session_state:
+        del st.session_state["ticker_editor"]
+    
+    # 2. On vide le cache pour forcer la relecture du Sheets
+    st.cache_data.clear()
 
 # --- 5. INTERFACE ---
 st.set_page_config(page_title="Expert Bourse Pro+", layout="wide")
@@ -476,7 +485,7 @@ with st.sidebar:
     # --- ÉTAPE A : CRÉER (Pour ajouter un nouveau fichier) ou supprimer ---
     st.header("📂 Portefeuilles")
     lists = get_all_watchlists()
-    sel_list = st.selectbox("Liste active :", lists, key='sel_list')
+    sel_list = st.selectbox("Liste active :", lists, key='sel_list', on_change=on_list_change)
 
     # --- OPTIONS DE GESTION (Tiroirs) ---
     col1, col2 = st.columns(2)
