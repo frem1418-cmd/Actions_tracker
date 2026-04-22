@@ -835,7 +835,9 @@ if t_list:
                     #url_fr = f"https://news.google.com/rss/search?q={ticker_clean}+bourse+when:7d&hl=fr&gl=FR&ceid=FR:fr"
                     url_fr = f"https://news.google.com/rss/search?q={nom_pour_recherche}+bourse+when:7d&hl=fr&gl=FR&ceid=FR:fr"
                     feed = feedparser.parse(url_fr)
-
+                    short_name = nom_pour_recherche.split(' ')[0].upper().replace(",", "")
+                    clean_t = ticker_clean.split('.')[0].upper()
+                    st.write(f"DEBUG: Recherche {short_name} ou {clean_t}")
                     for entry in feed.entries:
                         title_upper = entry.title.upper()
                         
