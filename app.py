@@ -818,36 +818,30 @@ if t_list:
                 # --- BLOC NEWS SÉCURISÉ ---
                 st.divider()
                 st.subheader("📰 Dernières Actualités")
-
+                ticker_brut = d.get('Ticker', 'AAPL')
+                ticker_clean = ticker_brut.split('.')[0].upper()
                 all_news = []
-                # 1. RÉCUPÉRATION VRAIMENT FIABLE DU TICKER ET DU NOM
-                # On vérifie d'abord dans 'd', sinon on utilise une variable de secours
-                ticker_selectionne = d.get('Ticker') or d.get('ticker') or str(ticker_clean)
-                nom_selectionne = d.get('Nom') or d.get('nom') or ticker_selectionne
+                # 1. RÉCUPÉRATION FIABLE DES IDENTIFIANTS
+                # On récupère le ticker et le nom depuis le dictionnaire 'd'
+                t_brut = d.get('Ticker') or d.get('ticker') or "AAPL"
+                n_brut = d.get('Nom') or d.get('nom') or t_brut
 
-                # On nettoie pour Google et Finviz
-                t_clean = str(ticker_selectionne).split('.')[0].upper()
-                n_clean = str(nom_selectionne).replace(" S.A.", "").replace(" SA", "").replace(" Inc", "")
-
-                # --- DEBUG TEMPORAIRE (A supprimer quand ça marche) ---
-                # st.write(f"Recherche en cours pour : {t_clean} ({n_clean})")
-                # RÉCUPÉRATION DU NOM : On essaie de prendre le nom dans le dictionnaire 'd'
-                # Si 'Nom' n'existe pas, on utilise le Ticker par défaut
-                nom_action = d.get('Nom', ticker_clean)
+                # On prépare les versions propres pour le filtrage
+                t_clean = str(t_brut).split('.')[0].upper()
+                n_clean = str(n_brut).replace(" S.A.", "").replace(" SA", "").replace(" Inc", "").replace(", Inc.", "")
                 
-                            
-               # --- 1. RÉCUPÉRATION GOOGLE NEWS (FR) ---
+                # --- 1. RÉCUPÉRATION GOOGLE NEWS (FR) ---
                 try:
-                    # Nettoyage du nom pour la recherche
-                    nom_pour_recherche = nom_action.replace(" SA", "").replace(" Inc", "").replace(" Corp", "")
-                    #url_fr = f"https://news.google.com/rss/search?q={ticker_clean}+bourse+when:7d&hl=fr&gl=FR&ceid=FR:fr"
-                    url_fr = f"https://news.google.com/rss/search?q={nom_pour_recherche}+bourse+when:7d&hl=fr&gl=FR&ceid=FR:fr"
+                    # On utilise le nom simplifié pour la recherche
+                    query_name = n_clean.split(' ')[0].strip()
+                    url_fr = f"https://news.google.com/rss/search?q={query_name}+bourse+when:7d&hl=fr&gl=FR&ceid=FR:fr"
                     feed = feedparser.parse(url_fr)
 
                     for entry in feed.entries:
                         title_upper = entry.title.upper()
-                        # On vérifie si le nom est bien dans le titre (évite les news globales)
-                        if nom_pour_recherche.upper() in title_upper:
+                        
+                        # Filtrage : On accepte si le nom court OU le ticker est présent
+                        if query_name.upper() in title_upper or t_clean in title_upper:
                             dt_obj = datetime(*entry.published_parsed[:6])
                             all_news.append({
                                 'timestamp': dt_obj,
@@ -857,30 +851,23 @@ if t_list:
                                 'lien': entry.link,
                             })
                 except Exception as e:
-                    print(f"Erreur Google News pour {ticker_clean}: {e}")
+                    print(f"Erreur Google News pour {t_clean}: {e}") # Corrigé ici
 
                 # --- 2. SOURCE ALTERNATIVE : FINVIZ (US) ---
                 try:
-                    t_finviz = ticker_clean.upper().split('.')[0]
-                    url_finviz = f"https://finviz.com/quote.ashx?t={t_finviz}"
+                    url_finviz = f"https://finviz.com/quote.ashx?t={t_clean}"
                     headers = {'User-Agent': 'Mozilla/5.0'}
                     response = requests.get(url_finviz, headers=headers, timeout=10)
 
                     if response.status_code == 200:
                         soup = BeautifulSoup(response.content, 'html.parser')
                         news_table = soup.find(id='news-table')
-
                         if news_table:
-                            rows = news_table.findAll('tr')
-                            for row in rows[:10]: # On analyse les 10 premières
+                            for row in news_table.findAll('tr')[:10]:
                                 a_tag = row.find('a')
                                 if a_tag:
                                     text = a_tag.get_text()
-                                    text_upper = text.upper()
-                                    
-                                    # FILTRAGE STRICT : Le ticker doit être mentionné explicitement
-                                    patterns = [f"({t_finviz})", f" {t_finviz} ", f"${t_finviz}", f"{t_finviz}:"]
-                                    if any(p in text_upper for p in patterns) or text_upper.startswith(t_finviz):
+                                    if t_clean in text.upper():
                                         all_news.append({
                                             'timestamp': datetime.now(),
                                             'date_visuelle': datetime.now().strftime('%d/%m'),
@@ -889,7 +876,8 @@ if t_list:
                                             'lien': a_tag['href'],
                                         })
                 except Exception as e:
-                    print(f"Erreur Finviz pour {ticker_clean}: {e}")
+                    print(f"Erreur Finviz pour {t_clean}: {e}") # Corrigé ici
+                
                             
 
                 # --- 3. Affichage ---
