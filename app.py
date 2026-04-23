@@ -103,7 +103,8 @@ def get_quick_news(ticker):
             for entry in feed.entries[:5]:
                 # Conversion de la date RSS en objet datetime pour le tri
                 # Format type: "Fri, 19 Apr 2024 10:30:00 -0400"
-                dt_obj = datetime.strptime(entry.published[:25].strip(), '%a, %d %b %Y %H:%M:%S')
+                from datetime import timedelta
+                dt_obj = datetime.strptime(entry.published[:25].strip(), '%a, %d %b %Y %H:%M:%S') + timedelta(hours=6)
                 
                 news_list.append({
                     'dt_obj': dt_obj,
@@ -121,7 +122,19 @@ def get_quick_news(ticker):
     # --- LE TRI FINAL (Plus récent en haut) ---
     # On trie la liste par l'objet 'dt_obj' du plus récent au plus ancien
     news_list.sort(key=lambda x: x['dt_obj'], reverse=True)
-
+    # --- NOUVEL AFFINAGE DES DATES POUR L'AFFICHAGE ---
+    now = datetime.now()
+    for item in news_list:
+        dt = item['dt_obj']
+        # Si c'est aujourd'hui, on met "Auj. HH:MM"
+        if dt.date() == now.date():
+            item['date'] = dt.strftime('Auj. %H:%M')
+        # Si c'est hier, on met "Hier HH:MM"
+        elif (now.date() - dt.date()).days == 1:
+            item['date'] = dt.strftime('Hier %H:%M')
+        # Sinon format standard
+        else:
+            item['date'] = dt.strftime('%d/%m %H:%M')
     return news_list
 # ---  FONCTIONS de rafraichissement de news ---
 @st.cache_data(ttl=86400) # Cache le nom 24h
