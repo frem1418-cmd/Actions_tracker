@@ -96,14 +96,16 @@ def get_quick_news(ticker):
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             }
-        response = requests.get(rss_url, headers=headers, timeout=10)
+        r_sa = requests.get(rss_url, headers=headers, timeout=5)
         
-        if response.status_code == 200:
-            feed = feedparser.parse(response.text)
-            for entry in feed.entries[:5]:
-                # Conversion de la date RSS en objet datetime pour le tri
-                # Format type: "Fri, 19 Apr 2024 10:30:00 -0400"
-                from datetime import timedelta
+        if r_sa.status_code == 200:
+            f_sa = feedparser.parse(r_sa.text)
+            for entry in f_sa.entries[:5]:
+                # Calcul du sentiment pour la pastille
+                pol = TextBlob(entry.title).sentiment.polarity
+                icon = "🟢" if pol > 0.1 else "🔴" if pol < -0.1 else "⚪"
+                
+                # Parsing de la date
                 dt_obj = datetime.strptime(entry.published[:25].strip(), '%a, %d %b %Y %H:%M:%S') + timedelta(hours=6)
                 
                 news_list.append({
@@ -113,9 +115,7 @@ def get_quick_news(ticker):
                     'lien': entry.link,
                     'badge': f"{icon} :orange[[α]]" # Badge spécifique pour repérer les analyses
                 })
-        else:
-            # Si ça échoue encore, on affiche le code pour comprendre
-            print(f"SA DEBUG: {t_clean} encore en erreur {response.status_code}")
+        
     except Exception as e:
         print(f"SA Erreur: {e}")
 
@@ -191,11 +191,11 @@ def news_timeline_module(liste_tickers):
     # 2. On trie tout par date (la plus récente en haut)
     all_news.sort(key=lambda x: x['dt_obj'], reverse=True)
     
-    # 3. Affichage
-    st.write("---")
+    # --- AFFICHAGE DES NEWS DANS LA VUE DÉTAILLÉE ---
     if all_news:
-        for a in all_news[:50]: # On affiche les 50 plus récentes
-            st.markdown(f"{a['badge']} | {a['date']} | [{a['display_title']}]({a['lien']})")
+        for n in all_news:
+            # On utilise le formatage harmonisé avec tes nouvelles icônes
+            st.markdown(f"{n['badge']} | **{n['date']}** : [{n['titre']}]({n['lien']})")
     else:
         st.info("Aucune news disponible.")    
 
@@ -885,109 +885,9 @@ if t_list:
                 st.write(f"📊 Nombre de news trouvées : {len(news_test)}")
                 ticker_brut = d.get('Ticker', 'AAPL')
                 ticker_clean = ticker_brut.split('.')[0].upper()
-                all_news = []
+                # Appel de la fonction centralisée qui contient déjà toute la logique
+                all_news = get_quick_news(ticker_clean)
                 
-                # On récupère le ticker et le nom depuis le dictionnaire 'd'
-                t_brut = d.get('Ticker') or d.get('ticker') or "AAPL"
-                n_brut = d.get('Nom') or d.get('nom') or t_brut
-
-                # On prépare les versions propres pour le filtrage
-                t_clean = str(t_brut).split('.')[0].upper()
-                n_clean = str(n_brut).replace(" S.A.", "").replace(" SA", "").replace(" Inc", "").replace(", Inc.", "")
-                
-                # --- DÉFINITION de  LA BLACKLIST GLOBALE ---
-                # Ces mots indiquent souvent des pubs, des listes d'actions ou du contenu robotisé
-                blacklist = [
-                    "SPONSORED", "PROMO", "DEAL OF THE DAY", "TOP 10", "WEEKLY ROUNDUP", 
-                    "LISTE D'ACTIONS", "SÉLECTION", "PANIER", "MEILLEURES ACTIONS",
-                    "TRADING BOT", "YIELD", "CRYPTO", "FOREX"
-                ]
-
-                # --- 1. RÉCUPÉRATION GOOGLE NEWS (FR) ---
-                try:
-                    # On utilise le nom simplifié pour la recherche
-                    query_name = n_clean.split(' ')[0].strip()
-                    url_fr = f"https://news.google.com/rss/search?q={query_name}+bourse+when:7d&hl=fr&gl=FR&ceid=FR:fr"
-                    feed = feedparser.parse(url_fr)
-
-                    for entry in feed.entries:
-                        title_upper = entry.title.upper()
-                    
-                    # 1. Vérification de la pertinence (Nom ou Ticker)
-                    is_relevant = (query_name.upper() in title_upper) or (t_clean in title_upper)
-                    
-                    # 2. Filtrage par Blacklist (Pubs, Listes, etc.)
-                    if is_relevant and any(word in title_upper for word in blacklist):
-                        is_relevant = False
-                    
-                    # 3. FILTRE ANTI-BRUIT (Nouveau) : Éviter les articles qui citent trop d'actions
-                    # Si un titre contient trop de virgules ou de symboles '$', c'est souvent une liste de cours
-                    if is_relevant and (title_upper.count(',') > 3 or title_upper.count('$') > 2):
-                        is_relevant = False
-
-                    # 4. Ajout final si toujours valide
-                    if is_relevant:
-                        dt_obj = datetime(*entry.published_parsed[:6])
-                        all_news.append({
-                            'timestamp': dt_obj,
-                            'date_visuelle': dt_obj.strftime('%d/%m'),
-                            'titre': entry.title,
-                            'source': f"🇫🇷 {entry.source.get('title', 'Google')}",
-                            'lien': entry.link,
-                        })
-                except Exception as e:
-                    print(f"Erreur Google News pour {t_clean}: {e}")
-
-                # --- 2. SOURCE ALTERNATIVE : FINVIZ (US) ---
-                try:
-                    url_finviz = f"https://finviz.com/quote.ashx?t={t_clean}"
-                    headers = {'User-Agent': 'Mozilla/5.0'}
-                    response = requests.get(url_finviz, headers=headers, timeout=10)
-
-                    if response.status_code == 200:
-                        soup = BeautifulSoup(response.content, 'html.parser')
-                        news_table = soup.find(id='news-table')
-                        if news_table:
-                            for row in news_table.findAll('tr')[:10]:
-                                a_tag = row.find('a')
-                                if a_tag:
-                                    text = a_tag.get_text()
-                                    if t_clean in text.upper():
-                                        # Vérification blacklist pour Finviz aussi
-                                       if not any(word in text.upper() for word in blacklist):
-                                            all_news.append({
-                                                'timestamp': datetime.now(),
-                                                'date_visuelle': datetime.now().strftime('%d/%m'),
-                                                'titre': text,
-                                                'source': "🇺🇸 Finviz",
-                                                'lien': a_tag['href'],
-                                            })
-                except Exception as e:
-                    print(f"Erreur Finviz pour {t_clean}: {e}")
-                
-                 # --- 3. RÉCUPÉRATION SEEKING ALPHA (Analyses US) ---
-                try:
-                    rss_sa = f"https://seekingalpha.com/api/v1/symbols/{t_clean}/rss"
-                    # On utilise un header pour éviter le blocage
-                    headers = {'User-Agent': 'Mozilla/5.0'}
-                    response_sa = requests.get(rss_sa, headers=headers, timeout=5)
-                    
-                    if response_sa.status_code == 200:
-                        feed_sa = feedparser.parse(response_sa.text)
-                        for entry in feed_sa.entries[:5]: # On prend les 5 dernières
-                            dt_obj = datetime(*entry.published_parsed[:6])
-                            
-                            all_news.append({
-                                'timestamp': dt_obj,
-                                'date_visuelle': dt_obj.strftime('%d/%m'),
-                                'titre': entry.title,
-                                'source': "Seeking Alpha (Analyses)",
-                                'lien': entry.link,
-                            })
-                except Exception as e:
-                    print(f"Erreur Seeking Alpha pour {t_clean}: {e}")           
-
-                # --- 3. Affichage ---
                 # --- 3. TRI ET AFFICHAGE AVEC ANALYSE DE SENTIMENT ---
                 if all_news:
                     all_news.sort(key=lambda x: x['timestamp'], reverse=True)
