@@ -602,9 +602,9 @@ if t_list:
     
     df = pd.DataFrame(data_res)
 
-    #Convertir la colonne 'Date détach.' en format date (ajuste le nom exact de la colonne)
+    #Convertir la colonne 'Date Détachement' en format date (ajuste le nom exact de la colonne)
     # dayfirst=True est important si tes dates sont au format JJ/MM/AAAA
-    df['Date détach.'] = pd.to_datetime(df['Date détach.'], errors='coerce', dayfirst=True)    
+    df['Date Détachement'] = pd.to_datetime(df['Date Détachement'], errors='coerce', dayfirst=True)    
     # --- GESTION DES COLONNES VIA GOOGLE SHEETS ---
     try:
         # 1. Lecture de l'onglet de configuration
@@ -718,8 +718,8 @@ if t_list:
             hide_index=True,
             height=min(hauteur_dynamique, 850),
             column_config={
-                "Date détach.": st.column_config.DateColumn(
-                    "Date détach.",
+                "Date Détachement": st.column_config.DateColumn(
+                    "Date Détachement",
                     format="DD/MM/YYYY",  # Force l'affichage au format français
                 ),
                 **config_colonnes 
