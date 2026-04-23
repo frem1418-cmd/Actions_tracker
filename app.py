@@ -11,6 +11,7 @@ import requests
 from bs4 import BeautifulSoup
 import streamlit as st
 from streamlit_gsheets import GSheetsConnection
+from deep_translator import GoogleTranslator
 
 # Initialisation de la connexion (à faire une seule fois)
 conn = st.connection("gsheets", type=GSheetsConnection)
@@ -926,6 +927,16 @@ if t_list:
                         label = f"{icon_source} | **{date_str}** | {titre}"
                         
                         with st.expander(label):
+                            # 1. Option de traduction (Bouton ou Checkbox)
+                            if st.button("🔄 Traduire le titre", key=f"tr_{lien}"):
+                                try:
+                                    with st.spinner('Traduction...'):
+                                        trad = GoogleTranslator(source='auto', target='fr').translate(titre)
+                                        st.info(f"🇫🇷 **FR :** {trad}")
+                                except:
+                                    st.error("Erreur de service")
+
+                            # 2. Informations d'origine
                             st.write(f"**Source :** {article.get('source', 'Analyse/News')}")
                             st.link_button("Lire l'article", lien)
                 else:
