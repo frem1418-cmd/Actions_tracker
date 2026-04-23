@@ -99,7 +99,7 @@ def get_quick_news(ticker):
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             }
         response = requests.get(rss_url, headers=headers, timeout=10)
-        
+        st.write(f"DEBUG SA: {t_clean} - Status: {response.status_code}")
         if response.status_code == 200:
             feed = feedparser.parse(response.text)
             for entry in feed.entries[:5]:
