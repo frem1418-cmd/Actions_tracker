@@ -384,13 +384,19 @@ def get_all_watchlists():
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
         df = conn.read(worksheet="Watchlists")
-        # On récupère les noms uniques dans la colonne 'list_name'
-        if 'list_name' in df.columns:
-            return sorted(df['list_name'].dropna().unique().tolist())
-        return ["Portefeuille Principal"]
+        
+        # On crée un dictionnaire : { 'Nom_Liste': ['Ticker1', 'Ticker2'], ... }
+        watchlists_dict = {}
+        if 'list_name' in df.columns and 'Ticker' in df.columns:
+            for name in df['list_name'].dropna().unique():
+                tickers = df[df['list_name'] == name]['Ticker'].tolist()
+                watchlists_dict[name] = tickers
+            return watchlists_dict
+        
+        return {"Portefeuille Principal": ["AAPL"]}
     except Exception as e:
         # En cas d'erreur (ex: pas de connexion), on renvoie une liste par défaut
-        return ["Portefeuille Principal"]
+        return {"Portefeuille Principal": ["AAPL"]}
 
 
 def delete_watchlist_gsheets(watchlist_name):
@@ -514,7 +520,7 @@ with st.sidebar:
     # --- ÉTAPE A : CRÉER (Pour ajouter un nouveau fichier) ou supprimer ---
     st.header("📂 Portefeuilles")
     lists = get_all_watchlists()
-    sel_list = st.selectbox("Liste active :", lists, key='sel_list', on_change=on_list_change)
+    sel_list = st.selectbox("Liste active :", list(lists.keys()), key='sel_list', on_change=on_list_change)
 
     # --- OPTIONS DE GESTION (Tiroirs) ---
     col1, col2 = st.columns(2)
