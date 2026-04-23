@@ -386,23 +386,22 @@ def get_all_watchlists():
         df = conn.read(worksheet="Watchlists")
         
         watchlists_dict = {}
-        if 'list_name' in df.columns and 'Ticker' in df.columns:
-            # On récupère tous les noms de listes présents dans la colonne 'list_name'
-            noms_listes = df['list_name'].dropna().unique()
+        if not df.empty and 'list_name' in df.columns:
+            # On groupe les tickers par nom de liste
+            # On suppose que tes tickers sont dans une colonne 'tickers' ou 'Ticker'
+            col_ticker = 'tickers' if 'tickers' in df.columns else 'Ticker'
             
-            for nom in noms_listes:
-                # Pour chaque nom, on récupère les tickers correspondants
-                tickers = df[df['list_name'] == nom]['Ticker'].tolist()
-                watchlists_dict[nom] = tickers
+            for name in df['list_name'].dropna().unique():
+                # On récupère la chaîne de tickers (ex: "MSFT, AAPL")
+                t_data = df[df['list_name'] == name][col_ticker].iloc[0]
+                # On transforme la chaîne en liste propre
+                ticker_list = [t.strip().upper() for t in str(t_data).split(',') if t.strip()]
+                watchlists_dict[name] = ticker_list
             
             return watchlists_dict
-        
-        # Secours si le fichier est mal lu
-        return {"Erreur": ["AAPL"]}
-    except Exception as e:
-        st.error(f"Erreur GSheet: {e}")
-        # En cas d'erreur (ex: pas de connexion), on renvoie une liste par défaut
-        return {"Erreur": ["AAPL"]}
+        return {"Actions_EU": ["AAPL"]} # Secours
+    except:
+        return {"Actions_EU": ["AAPL"]} # Secours
 
 
 def delete_watchlist_gsheets(watchlist_name):
@@ -893,24 +892,26 @@ if t_list:
                 st.write(f"**Détachement :** {d['Date Détachement']}")
                 st.write(f"**Avis :** {d['Avis Analystes']} | **Secteur :** {d['Secteur']}")
 
-                # --- 1. SÉCURITÉ DE SYNCHRONISATION (Lignes 881-892 OK) ---
+                # --- 1. SÉCURITÉ DE SYNCHRONISATION  ---
+                # On récupère les données fraîches
+                all_lists = get_all_watchlists() 
+
                 if not d or 'Ticker' not in d:
-                    all_lists = get_all_watchlists()
+                    # On regarde quelle liste est sélectionnée dans le menu de gauche (sel_list)
                     current_list = all_lists.get(sel_list, [])
+                    
                     if current_list:
+                        # On prend le PREMIER ticker de TA liste réelle
                         ticker_clean = current_list[0].split('.')[0].upper()
                     else:
                         ticker_clean = "AAPL"
                 else:
+                    # Si l'utilisateur a cliqué sur une ligne, on prend ce ticker
                     ticker_clean = str(d['Ticker']).split('.')[0].upper()
 
-                # --- 2. AFFICHAGE ET APPEL UNIQUE ---
-                st.divider()
+                # --- 2. AFFICHAGE ---
                 st.subheader(f"📰 Dernières Actualités : {ticker_clean}")
-
-                # Un seul appel à la fonction
                 all_news = get_quick_news(ticker_clean)
-
                 # Un seul tri
                 if all_news:
                     all_news.sort(key=lambda x: x.get('dt_obj', datetime.now()), reverse=True)
