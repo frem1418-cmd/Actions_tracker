@@ -710,6 +710,7 @@ if t_list:
             selection_mode="single-row",
             use_container_width=True,
             hide_index=True,
+            height=None,
             column_config=config_colonnes 
         )
         if sel.selection and sel.selection.rows:
