@@ -704,13 +704,15 @@ if t_list:
         else:
             st.info("La liste de tickers est vide.")
     else:
+        # Calcul dynamique : 35 pixels par ligne + 38 pixels pour l'en-tête
+        hauteur_dynamique = (len(df) * 35) + 38
         sel = st.dataframe(
             df[selection_finale].style.apply(style_df, axis=None).format(formatter=lambda x: clean_num(x) if isinstance(x, (int, float)) else x),
             on_select="rerun",
             selection_mode="single-row",
             use_container_width=True,
             hide_index=True,
-            height="auto",
+            height=min(hauteur_dynamique, 900),
             column_config=config_colonnes 
         )
         if sel.selection and sel.selection.rows:
