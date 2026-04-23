@@ -92,7 +92,9 @@ def get_quick_news(ticker):
     except: pass
     # --- 3. Seeking Alpha US ---
     try:
-        rss_url = f"https://seekingalpha.com/api/v1/symbols/{t_clean}/rss"
+        symbol_sa = t_clean.split('.')[0] 
+        rss_url = f"https://seekingalpha.com/api/v1/symbols/{symbol_sa}/rss"
+        
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             }
@@ -103,17 +105,10 @@ def get_quick_news(ticker):
             for entry in feed.entries[:5]:
                 # Conversion de la date RSS en objet datetime pour le tri
                 # Format type: "Fri, 19 Apr 2024 10:30:00 -0400"
-                dt_obj = datetime.strptime(entry.published[:25], '%a, %d %b %Y %H:%M:%S')
+                dt_obj = datetime.strptime(entry.published[:25].strip(), '%a, %d %b %Y %H:%M:%S')
                 
-                news_list.append({
-                    'dt_obj': dt_obj,
-                    'date': dt_obj.strftime('%d/%m %H:%M'),
-                    'titre': entry.title,
-                    'lien': entry.link,
-                    'badge': "🧠 SA" # Badge spécifique pour repérer les analyses
-                })
-    except Exception:
-        pass
+    except :
+        dt_obj = datetime.now()
     
     # --- LE TRI FINAL (Plus récent en haut) ---
     # On trie la liste par l'objet 'dt_obj' du plus récent au plus ancien
