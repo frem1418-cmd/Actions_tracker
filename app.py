@@ -877,40 +877,39 @@ if t_list:
                 st.write(f"**Détachement :** {d['Date Détachement']}")
                 st.write(f"**Avis :** {d['Avis Analystes']} | **Secteur :** {d['Secteur']}")
 
-                # --- SÉCURITÉ DE SYNCHRONISATION ---
-                # On s'assure que 'd' (tes données) contient bien un Ticker avant de lancer les news
+                # --- 1. SÉCURITÉ DE SYNCHRONISATION (Lignes 881-892 OK) ---
                 if not d or 'Ticker' not in d:
-                    # Si d est vide au lancement, on essaye de prendre le 1er ticker 
-                    # de la liste active pour éviter l'affichage de "fantômes"
-                    current_list = get_all_watchlists().get(sel_list, ["AAPL"])
-                    ticker_clean = current_list[0].split('.')[0].upper()
+                    all_lists = get_all_watchlists()
+                    current_list = all_lists.get(sel_list, [])
+                    if current_list:
+                        ticker_clean = current_list[0].split('.')[0].upper()
+                    else:
+                        ticker_clean = "AAPL"
                 else:
-                    ticker_clean = str(d['Ticker']).split('.')[0].upper()                                  
-                
-                # --- BLOC NEWS SÉCURISÉ ---
+                    ticker_clean = str(d['Ticker']).split('.')[0].upper()
+
+                # --- 2. AFFICHAGE ET APPEL UNIQUE ---
                 st.divider()
-                st.subheader("📰 Dernières Actualités")
+                st.subheader(f"📰 Dernières Actualités : {ticker_clean}")
+
+                # Un seul appel à la fonction
                 all_news = get_quick_news(ticker_clean)
-                all_news.sort(key=lambda x: x['dt_obj'], reverse=True)
+
+                # Un seul tri
                 if all_news:
-                    # 2. On affiche les 12 premières news
+                    all_news.sort(key=lambda x: x.get('dt_obj', datetime.now()), reverse=True)
+                    
+                    # --- 3. BOUCLE D'AFFICHAGE ---
                     for article in all_news[:12]:
-                        # On récupère les infos envoyées par ta fonction get_quick_news
-                        # Note : Ta fonction gère déjà l'icône de sentiment et le badge source
-                        
-                        icon_source = article.get('badge', '🌐') # Récupère la pastille + l'icône (ex: 🟢 :orange[α])
+                        icon_source = article.get('badge', '🌐')
                         date_str = article.get('date', 'Auj.')
                         titre = article.get('titre', 'Sans titre')
                         lien = article.get('lien', '#')
 
-                        # Création du label pour l'expander
                         label = f"{icon_source} | **{date_str}** | {titre}"
                         
                         with st.expander(label):
                             st.write(f"**Source :** {article.get('source', 'Analyse/News')}")
-                            # Le lien vers l'article
                             st.link_button("Lire l'article", lien)
                 else:
                     st.info(f"ℹ️ Aucune actualité récente disponible pour {ticker_clean}")
-
-
