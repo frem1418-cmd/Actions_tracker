@@ -84,13 +84,35 @@ def get_quick_news(ticker):
                         dt_obj = datetime.strptime(f"{date_part} {tm_12h}", "%b-%d-%y %I:%M%p")
 
                     t_text = row.a.get_text()
-                    icon = "🟢" if TextBlob(t_text).sentiment.polarity > 0.1 else "⚪"
-                    
+                    icon = "🟢" if TextBlob(t_text).sentiment.polarity > 0.1 else "🔴" if TextBlob(t_text).sentiment.polarity < -0.1 else "⚪"
                     news_list.append({
                         'dt_obj': dt_obj, 'date': display_date,
                         'titre': t_text, 'lien': row.a['href'], 'badge': f"{icon} 📈"
                     })
     except: pass
+    # --- 3. Seeking Alpha US ---
+    try:
+        rss_url = f"https://seekingalpha.com/api/v1/symbols/{t_clean}/rss"
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
+        response = requests.get(rss_url, headers=headers, timeout=5)
+        
+        if response.status_code == 200:
+            feed = feedparser.parse(response.text)
+            for entry in feed.entries[:5]:
+                # Conversion de la date RSS en objet datetime pour le tri
+                # Format type: "Fri, 19 Apr 2024 10:30:00 -0400"
+                dt_obj = datetime.strptime(entry.published[:25], '%a, %d %b %Y %H:%M:%S')
+                
+                news_list.append({
+                    'dt_obj': dt_obj,
+                    'date': dt_obj.strftime('%d/%m %H:%M'),
+                    'titre': entry.title,
+                    'lien': entry.link,
+                    'badge': "🧠 SA" # Badge spécifique pour repérer les analyses
+                })
+    except Exception:
+        pass
+    
     # --- LE TRI FINAL (Plus récent en haut) ---
     # On trie la liste par l'objet 'dt_obj' du plus récent au plus ancien
     news_list.sort(key=lambda x: x['dt_obj'], reverse=True)
@@ -922,7 +944,27 @@ if t_list:
                 except Exception as e:
                     print(f"Erreur Finviz pour {t_clean}: {e}")
                 
+                 # --- 3. RÉCUPÉRATION SEEKING ALPHA (Analyses US) ---
+                try:
+                    rss_sa = f"https://seekingalpha.com/api/v1/symbols/{t_clean}/rss"
+                    # On utilise un header pour éviter le blocage
+                    headers = {'User-Agent': 'Mozilla/5.0'}
+                    response_sa = requests.get(rss_sa, headers=headers, timeout=5)
+                    
+                    if response_sa.status_code == 200:
+                        feed_sa = feedparser.parse(response_sa.text)
+                        for entry in feed_sa.entries[:5]: # On prend les 5 dernières
+                            dt_obj = datetime(*entry.published_parsed[:6])
                             
+                            all_news.append({
+                                'timestamp': dt_obj,
+                                'date_visuelle': dt_obj.strftime('%d/%m'),
+                                'titre': entry.title,
+                                'source': "Seeking Alpha (Analyses)",
+                                'lien': entry.link,
+                            })
+                except Exception as e:
+                    print(f"Erreur Seeking Alpha pour {t_clean}: {e}")           
 
                 # --- 3. Affichage ---
                 # --- 3. TRI ET AFFICHAGE AVEC ANALYSE DE SENTIMENT ---
