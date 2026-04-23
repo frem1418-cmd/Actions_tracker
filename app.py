@@ -712,7 +712,7 @@ if t_list:
             selection_mode="single-row",
             use_container_width=True,
             hide_index=True,
-            height=min(hauteur_dynamique, 1100),
+            height=min(hauteur_dynamique, 950),
             column_config=config_colonnes 
         )
         if sel.selection and sel.selection.rows:
