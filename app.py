@@ -600,7 +600,11 @@ if t_list:
             st.stop() # Cette ligne magique arrête le code ici SI data_res est vide
         # ------------------------
     
-    df = pd.DataFrame(data_res)    
+    df = pd.DataFrame(data_res)
+
+    #Convertir la colonne 'Date détach.' en format date (ajuste le nom exact de la colonne)
+    # dayfirst=True est important si tes dates sont au format JJ/MM/AAAA
+    df['Date détach.'] = pd.to_datetime(df['Date détach.'], errors='coerce', dayfirst=True)    
     # --- GESTION DES COLONNES VIA GOOGLE SHEETS ---
     try:
         # 1. Lecture de l'onglet de configuration
@@ -713,7 +717,13 @@ if t_list:
             use_container_width=True,
             hide_index=True,
             height=min(hauteur_dynamique, 850),
-            column_config=config_colonnes 
+            column_config={
+                "Date détach.": st.column_config.DateColumn(
+                    "Date détach.",
+                    format="DD/MM/YYYY",  # Force l'affichage au format français
+                ),
+                **config_colonnes 
+            },
         )
         if sel.selection and sel.selection.rows:
             d = data_res[sel.selection.rows[0]]
