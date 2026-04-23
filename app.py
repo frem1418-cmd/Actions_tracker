@@ -877,15 +877,19 @@ if t_list:
                 st.write(f"**Détachement :** {d['Date Détachement']}")
                 st.write(f"**Avis :** {d['Avis Analystes']} | **Secteur :** {d['Secteur']}")
 
-                                              
+                # --- SÉCURITÉ DE SYNCHRONISATION ---
+                # On s'assure que 'd' (tes données) contient bien un Ticker avant de lancer les news
+                if not d or 'Ticker' not in d:
+                    # Si d est vide au lancement, on essaye de prendre le 1er ticker 
+                    # de la liste active pour éviter l'affichage de "fantômes"
+                    current_list = get_all_watchlists().get(sel_list, ["AAPL"])
+                    ticker_clean = current_list[0].split('.')[0].upper()
+                else:
+                    ticker_clean = str(d['Ticker']).split('.')[0].upper()                                  
                 
                 # --- BLOC NEWS SÉCURISÉ ---
                 st.divider()
-                # Appel de la fonction centralisée qui contient déjà toute la logique
                 st.subheader("📰 Dernières Actualités")
-                ticker_clean = str(d.get('Ticker', 'AAPL')).split('.')[0].strip().upper()
-                # 1. On récupère les news via la fonction centralisée
-                # Assure-toi que ticker_clean contient bien juste le ticker (ex: 'AAPL')
                 all_news = get_quick_news(ticker_clean)
                 all_news.sort(key=lambda x: x['dt_obj'], reverse=True)
                 if all_news:
