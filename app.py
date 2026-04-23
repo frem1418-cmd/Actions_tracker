@@ -111,7 +111,7 @@ def get_quick_news(ticker):
                     'date': dt_obj.strftime('%d/%m %H:%M'),
                     'titre': entry.title,
                     'lien': entry.link,
-                    'badge': "🧠 SA" # Badge spécifique pour repérer les analyses
+                    'badge': f"{icon} :orange[[α]]" # Badge spécifique pour repérer les analyses
                 })
         else:
             # Si ça échoue encore, on affiche le code pour comprendre
