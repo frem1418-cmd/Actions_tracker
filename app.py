@@ -385,18 +385,24 @@ def get_all_watchlists():
         conn = st.connection("gsheets", type=GSheetsConnection)
         df = conn.read(worksheet="Watchlists")
         
-        # On crée un dictionnaire : { 'Nom_Liste': ['Ticker1', 'Ticker2'], ... }
         watchlists_dict = {}
         if 'list_name' in df.columns and 'Ticker' in df.columns:
-            for name in df['list_name'].dropna().unique():
-                tickers = df[df['list_name'] == name]['Ticker'].tolist()
-                watchlists_dict[name] = tickers
+            # On récupère tous les noms de listes présents dans la colonne 'list_name'
+            noms_listes = df['list_name'].dropna().unique()
+            
+            for nom in noms_listes:
+                # Pour chaque nom, on récupère les tickers correspondants
+                tickers = df[df['list_name'] == nom]['Ticker'].tolist()
+                watchlists_dict[nom] = tickers
+            
             return watchlists_dict
         
-        return {"Portefeuille Principal": ["AAPL"]}
+        # Secours si le fichier est mal lu
+        return {"Erreur": ["AAPL"]}
     except Exception as e:
+        st.error(f"Erreur GSheet: {e}")
         # En cas d'erreur (ex: pas de connexion), on renvoie une liste par défaut
-        return {"Portefeuille Principal": ["AAPL"]}
+        return {"Erreur": ["AAPL"]}
 
 
 def delete_watchlist_gsheets(watchlist_name):
