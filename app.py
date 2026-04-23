@@ -312,7 +312,7 @@ def calculate_piotroski_advanced(stock):
         return f"{sum(1 for c in checks.values() if c['status'])}/5", checks
     except: return "N/A", {}
 
-@st.cache_data(ttl=600)
+@st.cache_data(ttl=3600)
 def fetch_stock_data(ticker_str):
     try:
         s = yf.Ticker(ticker_str.strip())
