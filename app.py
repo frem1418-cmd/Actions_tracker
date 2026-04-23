@@ -877,25 +877,17 @@ if t_list:
                 st.write(f"**Détachement :** {d['Date Détachement']}")
                 st.write(f"**Avis :** {d['Avis Analystes']} | **Secteur :** {d['Secteur']}")
 
-                # --- BLOC NEWS SÉCURISÉ ---
-                st.divider()
-                st.subheader("📰 Dernières Actualités")
-                st.write(f"🔍 Recherche news pour : **{'Ticker'}**")
-                news_test = get_quick_news('Ticker')
-                st.write(f"📊 Nombre de news trouvées : {len(news_test)}")
-                ticker_brut = d.get('Ticker', 'AAPL')
-                ticker_clean = ticker_brut.split('.')[0].upper()
-                # Appel de la fonction centralisée qui contient déjà toute la logique
-                all_news = get_quick_news(ticker_clean)
+                                              
                 
                 # --- BLOC NEWS SÉCURISÉ ---
                 st.divider()
+                # Appel de la fonction centralisée qui contient déjà toute la logique
                 st.subheader("📰 Dernières Actualités")
-
+                ticker_clean = str(d.get('Ticker', 'AAPL')).split('.')[0].strip().upper()
                 # 1. On récupère les news via la fonction centralisée
                 # Assure-toi que ticker_clean contient bien juste le ticker (ex: 'AAPL')
                 all_news = get_quick_news(ticker_clean)
-
+                all_news.sort(key=lambda x: x['dt_obj'], reverse=True)
                 if all_news:
                     # 2. On affiche les 12 premières news
                     for article in all_news[:12]:
