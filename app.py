@@ -93,8 +93,10 @@ def get_quick_news(ticker):
     # --- 3. Seeking Alpha US ---
     try:
         rss_url = f"https://seekingalpha.com/api/v1/symbols/{t_clean}/rss"
-        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'}
-        response = requests.get(rss_url, headers=headers, timeout=5)
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+            }
+        response = requests.get(rss_url, headers=headers, timeout=10)
         
         if response.status_code == 200:
             feed = feedparser.parse(response.text)
