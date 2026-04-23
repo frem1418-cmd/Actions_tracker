@@ -888,34 +888,33 @@ if t_list:
                 # Appel de la fonction centralisée qui contient déjà toute la logique
                 all_news = get_quick_news(ticker_clean)
                 
-                # --- 3. TRI ET AFFICHAGE AVEC ANALYSE DE SENTIMENT ---
-                if all_news:
-                    all_news.sort(key=lambda x: x['timestamp'], reverse=True)
-                    
-                    for article in all_news[:12]:
-                        # Analyse de sentiment avec TextBlob
-                        analysis = TextBlob(article['titre'])
-                        polarity = analysis.sentiment.polarity  # Score entre -1 et 1
-                        
-                        # Définition de l'emoji et de la couleur selon le score
-                        if polarity > 0.1:
-                            sentiment_icon = "🟢"  # Positif
-                            sentiment_label = "Bullish"
-                        elif polarity < -0.1:
-                            sentiment_icon = "🔴"  # Négatif
-                            sentiment_label = "Bearish"
-                        else:
-                            sentiment_icon = "⚪"  # Neutre
-                            sentiment_label = "Neutre"
+                # --- BLOC NEWS SÉCURISÉ ---
+                st.divider()
+                st.subheader("📰 Dernières Actualités")
 
-                        # Affichage du label avec le sentiment
-                        label = f"{sentiment_icon} **{article['date_visuelle']}** | {article['titre']}"
+                # 1. On récupère les news via la fonction centralisée
+                # Assure-toi que ticker_clean contient bien juste le ticker (ex: 'AAPL')
+                all_news = get_quick_news(ticker_clean)
+
+                if all_news:
+                    # 2. On affiche les 12 premières news
+                    for article in all_news[:12]:
+                        # On récupère les infos envoyées par ta fonction get_quick_news
+                        # Note : Ta fonction gère déjà l'icône de sentiment et le badge source
+                        
+                        icon_source = article.get('badge', '🌐') # Récupère la pastille + l'icône (ex: 🟢 :orange[α])
+                        date_str = article.get('date', 'Auj.')
+                        titre = article.get('titre', 'Sans titre')
+                        lien = article.get('lien', '#')
+
+                        # Création du label pour l'expander
+                        label = f"{icon_source} | **{date_str}** | {titre}"
                         
                         with st.expander(label):
-                            st.write(f"**Source :** {article['source']}")
-                            st.write(f"**Sentiment :** {sentiment_label} (Score: {round(polarity, 2)})")
-                            st.link_button("Lire l'article", article['lien'])
+                            st.write(f"**Source :** {article.get('source', 'Analyse/News')}")
+                            # Le lien vers l'article
+                            st.link_button("Lire l'article", lien)
                 else:
-                    st.info(f"ℹ️ Aucune actualité récente disponible pour {ticker_clean}: {e}.")
+                    st.info(f"ℹ️ Aucune actualité récente disponible pour {ticker_clean}")
 
 
