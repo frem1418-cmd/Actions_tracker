@@ -1,7 +1,6 @@
 import streamlit as st
 import yfinance as yf
 import pandas as pd
-import os
 import requests
 import feedparser
 from datetime import datetime, timedelta
@@ -183,7 +182,6 @@ def update_tickers_callback():
     # On vide le cache pour que le tableau se mette à jour avec les nouveaux cours
     st.cache_data.clear()
 # --- 1. CONFIGURATION & DOSSIERS ---
-COLUMNS_FILE = "columns_config.txt"
 
 # --- 2. RÉFÉRENTIELS ---
 SECTORS_FR = {
@@ -370,19 +368,6 @@ def delete_watchlist_gsheets(watchlist_name):
     
     # 5. On vide le cache pour que la liste disparaisse du menu
     st.cache_data.clear()
-
-def load_columns(all_cols):
-    if os.path.exists(COLUMNS_FILE):
-        try:
-            # On force l'encodage ET on gère les erreurs de lecture
-            with open(COLUMNS_FILE, "r", encoding="utf-8") as f:
-                saved = f.read().split(",")
-                return [c for c in saved if c in all_cols]
-        except Exception:
-            # Si le fichier est illisible, on ne plante pas, on renvoie les défauts
-            default_cols = ["Nom", "Secteur", "Prix Actuel", "Entrée Synthèse (-15%)", "Entrée BNA -15%", "Entrée FCF -15%", "Entrée Analystes -15%", "Avis Analystes", "Nb Analystes" "Santé (Piotroski)"]
-            return default_cols
-    return ["Nom", "Secteur", "Prix Actuel", "Entrée Synthèse (-15%)", "Avis Analystes"]
 
 # --- FONCTION DE CHARGEMENT DES WATCHLISTS DEPUIS GOOGLE SHEETS ---
 def load_watchlist_gsheets(list_name):
