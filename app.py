@@ -92,14 +92,12 @@ def get_quick_news(ticker):
     except: pass
     # --- 3. Seeking Alpha US ---
     try:
-        symbol_sa = t_clean.split('.')[0] 
-        rss_url = f"https://seekingalpha.com/api/v1/symbols/{symbol_sa}/rss"
-        
+        rss_url = f"https://seekingalpha.com/symbol/{t_clean}/feed"
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
             }
         response = requests.get(rss_url, headers=headers, timeout=10)
-        st.write(f"DEBUG SA: {t_clean} - Status: {response.status_code}")
+        
         if response.status_code == 200:
             feed = feedparser.parse(response.text)
             for entry in feed.entries[:5]:
@@ -107,9 +105,19 @@ def get_quick_news(ticker):
                 # Format type: "Fri, 19 Apr 2024 10:30:00 -0400"
                 dt_obj = datetime.strptime(entry.published[:25].strip(), '%a, %d %b %Y %H:%M:%S')
                 
-    except :
-        dt_obj = datetime.now()
-    
+                news_list.append({
+                    'dt_obj': dt_obj,
+                    'date': dt_obj.strftime('%d/%m %H:%M'),
+                    'titre': entry.title,
+                    'lien': entry.link,
+                    'badge': "🧠 SA" # Badge spécifique pour repérer les analyses
+                })
+        else:
+            # Si ça échoue encore, on affiche le code pour comprendre
+            print(f"SA DEBUG: {t_clean} encore en erreur {response.status_code}")
+    except Exception as e:
+        print(f"SA Erreur: {e}")
+
     # --- LE TRI FINAL (Plus récent en haut) ---
     # On trie la liste par l'objet 'dt_obj' du plus récent au plus ancien
     news_list.sort(key=lambda x: x['dt_obj'], reverse=True)
