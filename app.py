@@ -526,8 +526,12 @@ with st.sidebar:
     # --- ÉTAPE A : CRÉER (Pour ajouter un nouveau fichier) ou supprimer ---
     st.header("📂 Portefeuilles")
     lists = get_all_watchlists()
-    sel_list = st.selectbox("Liste active :", list(lists.keys()), key='sel_list', on_change=on_list_change)
-
+    sel_list = st.selectbox(
+        "Liste active :", 
+        options=list(lists.keys()), 
+        key='sel_list', 
+        on_change=on_list_change
+    )
     # --- OPTIONS DE GESTION (Tiroirs) ---
     col1, col2 = st.columns(2)
     with col1:
