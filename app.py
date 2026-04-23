@@ -895,9 +895,7 @@ if t_list:
                 # --- DÉFINITION de  LA BLACKLIST GLOBALE ---
                 # Ces mots indiquent souvent des pubs, des listes d'actions ou du contenu robotisé
                 blacklist = [
-                    "SPONSORED", "PROMO", "DEAL OF THE DAY", "TOP 10", "WEEKLY ROUNDUP", 
-                    "LISTE D'ACTIONS", "SÉLECTION", "PANIER", "MEILLEURES ACTIONS",
-                    "TRADING BOT", "YIELD", "CRYPTO", "FOREX"
+                    
                 ]
 
                 # --- 1. RÉCUPÉRATION GOOGLE NEWS (FR) ---
