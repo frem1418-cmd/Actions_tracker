@@ -18,7 +18,7 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 #Fonction pour récupérer les news et analyser le sentiment
 def get_quick_news(ticker):
     news_list = []
-    t_clean = ticker.split('.')[0].upper()
+    t_clean = ticker.split('.')[0].strip().upper()
     # On récupère la date du jour au format Google pour comparer
     # ex: "21 Apr"
     today_str = datetime.now().strftime("%d %b")
@@ -880,6 +880,9 @@ if t_list:
                 # --- BLOC NEWS SÉCURISÉ ---
                 st.divider()
                 st.subheader("📰 Dernières Actualités")
+                st.write(f"🔍 Recherche news pour : **{'Ticker'}**")
+                news_test = get_quick_news('Ticker')
+                st.write(f"📊 Nombre de news trouvées : {len(news_test)}")
                 ticker_brut = d.get('Ticker', 'AAPL')
                 ticker_clean = ticker_brut.split('.')[0].upper()
                 all_news = []
@@ -895,7 +898,9 @@ if t_list:
                 # --- DÉFINITION de  LA BLACKLIST GLOBALE ---
                 # Ces mots indiquent souvent des pubs, des listes d'actions ou du contenu robotisé
                 blacklist = [
-                    
+                    "SPONSORED", "PROMO", "DEAL OF THE DAY", "TOP 10", "WEEKLY ROUNDUP", 
+                    "LISTE D'ACTIONS", "SÉLECTION", "PANIER", "MEILLEURES ACTIONS",
+                    "TRADING BOT", "YIELD", "CRYPTO", "FOREX"
                 ]
 
                 # --- 1. RÉCUPÉRATION GOOGLE NEWS (FR) ---
