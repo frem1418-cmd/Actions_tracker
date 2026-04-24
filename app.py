@@ -12,6 +12,7 @@ from bs4 import BeautifulSoup
 import streamlit as st
 from streamlit_gsheets import GSheetsConnection
 from deep_translator import GoogleTranslator
+from concurrent.futures import ThreadPoolExecutor
 
 # Initialisation de la connexion (à faire une seule fois)
 conn = st.connection("gsheets", type=GSheetsConnection)
@@ -26,7 +27,9 @@ def safe_translate(text):
     except:
         return text
 
+   
 #Fonction pour récupérer les news et analyser le sentiment
+@st.cache_data(ttl=900) # Les news sont gardées en mémoire 15 min
 def get_quick_news(ticker):
     news_list = []
     t_clean = ticker.split('.')[0].strip().upper()
@@ -34,111 +37,124 @@ def get_quick_news(ticker):
     # ex: "21 Apr"
     today_str = datetime.now().strftime("%d %b")
     # --- 1. Google News FR ---
-    try:
-        url = f"https://news.google.com/rss/search?q={t_clean}+bourse&hl=fr&gl=FR&ceid=FR:fr"
-        f = feedparser.parse(url)
-        for e in f.entries[:5]:
-            pol = TextBlob(e.title).sentiment.polarity
-            icon = "🟢" if pol > 0.1 else "🔴" if pol < -0.1 else "⚪"
-            raw_pub = e.published
-            day_month = raw_pub[5:11] # "21 Apr"
-            hour = raw_pub[17:22]    # "10:30"
-            
-            # Si c'est aujourd'hui, on remplace par Today
-            display_date = f"Today {hour}" if day_month == today_str else f"{day_month} {hour}"
-            
-            # On stocke aussi l'objet datetime pour le tri final
-            dt_obj = datetime.strptime(raw_pub[5:25], "%d %b %Y %H:%M:%S")
-            # Le titre Google est souvent : "Titre de l'article - Nom du Média"
-            parts = e.title.rsplit(' - ', 1)
-            clean_title = parts[0]
-            source_name = parts[1] if len(parts) > 1 else "Google News"
-
-            news_list.append({
-                'dt_obj': dt_obj,
-                'date': display_date,
-                'titre': e.title, 'lien': e.link, 'badge': f"{icon} 🌐",
-                'source': source_name
-            })
-    except: pass
-
-    # --- 2. Finviz US ---
-    try:
-        session = requests.Session()
-        h = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-        }
-        r = requests.get(f"https://finviz.com/quote.ashx?t={t_clean}", headers=h, timeout=5)
-        if r.status_code == 200:
-            soup = BeautifulSoup(r.content, 'html.parser')
-            table = soup.find(id='news-table')
-            if table:
-                last_dt_raw = ""
-                for row in table.findAll('tr')[:5]:
-                    tds = row.findAll('td')
-                    raw_dt = tds[0].get_text(strip=True)
-                    
-                    if " " in raw_dt:
-                        date_part = raw_dt.split(' ')[0] 
-                        tm_12h = raw_dt.split(' ')[1] # ex: "10:00PM"
-                        last_dt_raw = date_part
-                    else:
-                        tm_12h = raw_dt
-                        date_part = last_dt_raw
-                    
-                    # Conversion de l'heure AM/PM en 24h
-                    # On crée un objet time pour transformer 10:00PM en 22:00
-                    time_obj = datetime.strptime(tm_12h, "%I:%M%p")
-                    hour_24 = time_obj.strftime("%H:%M")
-
-                    if date_part == "Today":
-                        dt_obj = datetime.combine(datetime.now().date(), time_obj.time())
-                        display_date = f"Today {hour_24}"
-                    else:
-                        parts = date_part.split("-") # "Apr-20-26"
-                        display_date = f"{parts[1]} {parts[0]} {hour_24}"
-                        dt_obj = datetime.strptime(f"{date_part} {tm_12h}", "%b-%d-%y %I:%M%p")
-                    # On cherche le texte dans la cellule de la source (généralement un <span>)
-                    source_element = row.find('span')
-                    source_finviz = source_element.text.strip() if source_element else "Finviz"
-
-                    t_text = row.a.get_text()
-                    icon = "🟢" if TextBlob(t_text).sentiment.polarity > 0.1 else "🔴" if TextBlob(t_text).sentiment.polarity < -0.1 else "⚪"
-                    news_list.append({
-                        'dt_obj': dt_obj, 'date': display_date,
-                        'titre': t_text, 'lien': row.a['href'], 'badge': f"{icon} 📈", 
-                        'source': source_finviz
-                    })
-    except: pass
-    # --- 3. Seeking Alpha US ---
-    try:
-        rss_url = f"https://seekingalpha.com/symbol/{t_clean}/feed"
-        headers = {
-            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-            }
-        r_sa = requests.get(rss_url, headers=headers, timeout=5)
-        
-        if r_sa.status_code == 200:
-            f_sa = feedparser.parse(r_sa.text)
-            for entry in f_sa.entries[:5]:
-                # Calcul du sentiment pour la pastille
-                pol = TextBlob(entry.title).sentiment.polarity
+    def fetch_google():
+        try:
+            url = f"https://news.google.com/rss/search?q={t_clean}+bourse&hl=fr&gl=FR&ceid=FR:fr"
+            f = feedparser.parse(url)
+            for e in f.entries[:5]:
+                pol = TextBlob(e.title).sentiment.polarity
                 icon = "🟢" if pol > 0.1 else "🔴" if pol < -0.1 else "⚪"
+                raw_pub = e.published
+                day_month = raw_pub[5:11] # "21 Apr"
+                hour = raw_pub[17:22]    # "10:30"
                 
-                # Parsing de la date
-                dt_obj = datetime.strptime(entry.published[:25].strip(), '%a, %d %b %Y %H:%M:%S') + timedelta(hours=6)
+                # Si c'est aujourd'hui, on remplace par Today
+                display_date = f"Today {hour}" if day_month == today_str else f"{day_month} {hour}"
                 
+                # On stocke aussi l'objet datetime pour le tri final
+                dt_obj = datetime.strptime(raw_pub[5:25], "%d %b %Y %H:%M:%S")
+                # Le titre Google est souvent : "Titre de l'article - Nom du Média"
+                parts = e.title.rsplit(' - ', 1)
+                clean_title = parts[0]
+                source_name = parts[1] if len(parts) > 1 else "Google News"
+
                 news_list.append({
                     'dt_obj': dt_obj,
-                    'date': dt_obj.strftime('%d/%m %H:%M'),
-                    'titre': entry.title,
-                    'lien': entry.link,
-                    'badge': f"{icon} :orange[[α]]", # Badge spécifique pour repérer les analyses
-                    'source': "Seeking Alpha US"
+                    'date': display_date,
+                    'titre': e.title, 'lien': e.link, 'badge': f"{icon} 🌐",
+                    'source': source_name
                 })
+        except: return []
+
+    # --- 2. Finviz US ---
+    def fetch_finviz():
+        try:
+            session = requests.Session()
+            h = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
+            }
+            r = requests.get(f"https://finviz.com/quote.ashx?t={t_clean}", headers=h, timeout=5)
+            if r.status_code == 200:
+                soup = BeautifulSoup(r.content, 'html.parser')
+                table = soup.find(id='news-table')
+                if table:
+                    last_dt_raw = ""
+                    for row in table.findAll('tr')[:5]:
+                        tds = row.findAll('td')
+                        raw_dt = tds[0].get_text(strip=True)
+                        
+                        if " " in raw_dt:
+                            date_part = raw_dt.split(' ')[0] 
+                            tm_12h = raw_dt.split(' ')[1] # ex: "10:00PM"
+                            last_dt_raw = date_part
+                        else:
+                            tm_12h = raw_dt
+                            date_part = last_dt_raw
+                        
+                        # Conversion de l'heure AM/PM en 24h
+                        # On crée un objet time pour transformer 10:00PM en 22:00
+                        time_obj = datetime.strptime(tm_12h, "%I:%M%p")
+                        hour_24 = time_obj.strftime("%H:%M")
+
+                        if date_part == "Today":
+                            dt_obj = datetime.combine(datetime.now().date(), time_obj.time())
+                            display_date = f"Today {hour_24}"
+                        else:
+                            parts = date_part.split("-") # "Apr-20-26"
+                            display_date = f"{parts[1]} {parts[0]} {hour_24}"
+                            dt_obj = datetime.strptime(f"{date_part} {tm_12h}", "%b-%d-%y %I:%M%p")
+                        # On cherche le texte dans la cellule de la source (généralement un <span>)
+                        source_element = row.find('span')
+                        source_finviz = source_element.text.strip() if source_element else "Finviz"
+
+                        t_text = row.a.get_text()
+                        icon = "🟢" if TextBlob(t_text).sentiment.polarity > 0.1 else "🔴" if TextBlob(t_text).sentiment.polarity < -0.1 else "⚪"
+                        news_list.append({
+                            'dt_obj': dt_obj, 'date': display_date,
+                            'titre': t_text, 'lien': row.a['href'], 'badge': f"{icon} 📈", 
+                            'source': source_finviz
+                        })
+        except: return []
+    # --- 3. Seeking Alpha US ---
+    def fetch_seeking():
+        try:
+            rss_url = f"https://seekingalpha.com/symbol/{t_clean}/feed"
+            headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                }
+            r_sa = requests.get(rss_url, headers=headers, timeout=5)
+            
+            if r_sa.status_code == 200:
+                f_sa = feedparser.parse(r_sa.text)
+                for entry in f_sa.entries[:5]:
+                    # Calcul du sentiment pour la pastille
+                    pol = TextBlob(entry.title).sentiment.polarity
+                    icon = "🟢" if pol > 0.1 else "🔴" if pol < -0.1 else "⚪"
+                    
+                    # Parsing de la date
+                    dt_obj = datetime.strptime(entry.published[:25].strip(), '%a, %d %b %Y %H:%M:%S') + timedelta(hours=6)
+                    
+                    news_list.append({
+                        'dt_obj': dt_obj,
+                        'date': dt_obj.strftime('%d/%m %H:%M'),
+                        'titre': entry.title,
+                        'lien': entry.link,
+                        'badge': f"{icon} :orange[[α]]", # Badge spécifique pour repérer les analyses
+                        'source': "Seeking Alpha US"
+                    })
+            
+        except:  return []           
+    # 2. EXÉCUTION EN PARALLÈLE
+    with ThreadPoolExecutor(max_workers=3) as executor:
+        # On lance tout en même temps
+        futures = [executor.submit(fetch_google), executor.submit(fetch_finviz), executor.submit(fetch_seeking)]
         
-    except Exception as e:
-        print(f"SA Erreur: {e}")
+        for future in futures:
+            try:
+                # On récupère les résultats (max 4s d'attente par source)
+                news_list.extend(future.result(timeout=4))
+            except:
+                continue
 
     # --- LE TRI FINAL (Plus récent en haut) ---
     # On trie la liste par l'objet 'dt_obj' du plus récent au plus ancien
@@ -174,6 +190,7 @@ def news_dashboard_module(liste_tickers):
         st.subheader("🗞️ Flux d'actualités en direct")
     with col2:
         if st.button("🔄 Actualiser", key="ref_action"):
+            get_quick_news.clear()  # Force la recherche de nouvelles news
             st.rerun(scope="fragment")
 
     for t in liste_tickers:
@@ -189,10 +206,9 @@ def news_dashboard_module(liste_tickers):
                 st.caption(f"Aucune actualité récente pour {t}.")    
 
 
-# --- Fonction New - Vue Flux ou Timeline- liste chronologique des news ---
+# --- Fonction New - Vue Flux ou Timeline- liste chronologique des news. Toutes la conf est dans le module ---
 @st.fragment(run_every="5m")
-@st.fragment(run_every="5m")
-def news_timeline_module(liste_tickers):
+def actualite_module(liste_tickers):
     # --- 1. BARRE D'OUTILS (Recherche à gauche, Traduction/Refresh à droite) ---
     col_search, col_trad, col_ref = st.columns([0.6, 0.25, 0.15])
     
@@ -202,19 +218,24 @@ def news_timeline_module(liste_tickers):
     
     with col_trad:
         # Toggle pour la traduction globale
-        st.session_state.mode_fr = st.toggle("Tout traduire 🇫🇷", value=st.session_state.get('mode_fr', False))
+        #st.session_state.mode_fr = st.toggle("🇫🇷", value=st.session_state.get('mode_fr', False))
+        mode_global_fr = st.toggle("🇫🇷", key="mode_fr")
     
     with col_ref:
         # Bouton refresh compact
         if st.button("🔄", help="Actualiser le flux", key="refresh_news_final"):
+            get_quick_news.clear()  # Efface le cache des news pour forcer la récupération de nouvelles données
             st.rerun(scope="fragment")
 
     # --- 2. COLLECTE ET DÉDUPLICATION ---
     all_news = []
     for t in liste_tickers:
         articles = get_quick_news(t)
+        # On récupère le nom propre depuis notre dictionnaire
+        nom_propre = ticker_to_name.get(t, t)
         for a in articles:
             a['ticker_parent'] = t
+            a['nom_parent'] = nom_propre
             all_news.append(a)
 
     # Tri chronologique (plus récent en haut)
@@ -241,6 +262,7 @@ def news_timeline_module(liste_tickers):
             # Nettoyage de la source : (Yahoo) au lieu de ((Yahoo))
             source = n.get('source', 'Analyse').strip().strip('()')
             ticker = n['ticker_parent']
+            nom_action = n['nom_parent']
 
             # Traduction à la volée si le bouton est activé
             if st.session_state.get('mode_fr', False):
@@ -254,7 +276,7 @@ def news_timeline_module(liste_tickers):
                 titre_affiche = titre_brut
 
             # FORMAT FINAL : Badge | Date | TICKER : [Titre](Lien) (Source)
-            st.markdown(f"{n['badge']} | {n['date']} | **{ticker}** : [{titre_affiche}]({lien}) *({source})*")
+            st.markdown(f"{n['badge']} | {n['date']} | **{nom_action}** : [{titre_affiche}]({lien}) *({source})*")
     else:
         st.info("Aucune actualité ne correspond à votre recherche.")
 
@@ -311,7 +333,7 @@ def search_ticker(query):
         if not query: return []
         url = f"https://query2.finance.yahoo.com/v1/finance/search?q={query}"
         headers = {'User-Agent': 'Mozilla/5.0'}
-        response = requests.get(url, headers=headers)
+        response = requests.get(url, headers=headers, timeout=5)
         data = response.json()
         results = []
         for res in data.get('quotes', []):
@@ -548,7 +570,6 @@ st.markdown(
 )
 
 with st.sidebar:
-    # Ton bouton actuel à la ligne 178
     if st.button("🔄 Forcer l'actualisation", use_container_width=True):
         st.cache_data.clear()
         st.rerun()
@@ -688,22 +709,36 @@ t_list = [t.strip().upper() for t in tickers_input.replace('\r', '').replace('\n
 
 if t_list:
     data_res = []
-    for t in t_list:
-        res = fetch_stock_data(t)
-        if res:
-            data_res.append(res)
-        
-        # 1. Message d'avertissement si aucune donnée n'est récupérée (ex: problème Yahoo ou tickers invalides)
-        if not data_res:
-            st.warning("⚠️ Trop de requettes envoyées ou les tickers sont invalides. Réessayez dans quelques minutes.")
-            st.stop() # Cette ligne magique arrête le code ici SI data_res est vide
+    # Création d'une barre de progression pour patienter
+    progress_bar = st.progress(0)
+    for i, t in enumerate(t_list):
+        try: 
+            # 1. On tente de récupérer les données pour ce ticker
+            res = fetch_stock_data(t)
+
+            # 2. Si ça a marché, on l'ajoute à la liste
+            if res:
+                data_res.append(res)
+        except Exception as e:
+            st.sidebar.warning(f"⚠️ Impossible de charger {t}. (Erreur : {e})")
+            continue
+        # Mise à jour de la barre de progression
+        progress_bar.progress((i + 1) / len(t_list))
+    ## On enlève la barre une fois fini
+    progress_bar.empty()
+
+    #  1. Message d'avertissement si aucune donnée n'est récupérée (ex: problème Yahoo ou tickers invalides)
+    if not data_res:
+        st.warning("⚠️ Trop de requettes envoyées ou les tickers sont invalides. Réessayez dans quelques minutes.")
+        st.stop() # Cette ligne magique arrête le code ici SI data_res est vide
         # ------------------------
-    
+    # 2. On construit le DataFrame à partir de la liste de résultats
     df = pd.DataFrame(data_res)
 
     #Convertir la colonne 'Date Détachement' en format date (ajuste le nom exact de la colonne)
     # dayfirst=True est important si tes dates sont au format JJ/MM/AAAA
     df['Date Détachement'] = pd.to_datetime(df['Date Détachement'], errors='coerce', dayfirst=True)    
+    ticker_to_name = dict(zip(df['Ticker'], df['Nom']))
     # --- GESTION DES COLONNES VIA GOOGLE SHEETS ---
     try:
         # 1. Lecture de l'onglet de configuration
@@ -781,7 +816,7 @@ if t_list:
             liste_tickers = [t.strip().upper() for t in tickers_input.split(',') if t.strip()]
             
             # ON APPELLE DIRECTEMENT LE FLUX CHRONOLOGIQUE (Plus besoin de radio bouton)
-            news_timeline_module(liste_tickers)
+            actualite_module(liste_tickers)
         else:
             st.info("La liste de tickers est vide.")
     else:
@@ -947,93 +982,92 @@ if t_list:
                 st.write(f"**Détachement :** {d['Date Détachement']}")
                 st.write(f"**Avis :** {d['Avis Analystes']} | **Secteur :** {d['Secteur']}")
 
-                # --- 1. SÉCURITÉ DE SYNCHRONISATION  ---
-                # On récupère les données fraîches
-                all_lists = get_all_watchlists() 
-
-                if not d or 'Ticker' not in d:
-                    # On regarde quelle liste est sélectionnée dans le menu de gauche (sel_list)
-                    current_list = all_lists.get(sel_list, [])
-                    
-                    if current_list:
-                        # On prend le PREMIER ticker de TA liste réelle
-                        ticker_clean = current_list[0].split('.')[0].upper()
-                    else:
-                        ticker_clean = "AAPL"
-                else:
-                    # Si l'utilisateur a cliqué sur une ligne, on prend ce ticker
+                # --- Mise en place et affichage de la partie "Dernières Actualités dans la vue avancée de l'action"  ---
+                mode_fr = False  # Valeur par défaut pour éviter l'erreur Pylance
+                ticker_clean = "AAPL"
+                # --- 1. IDENTIFICATION DU TICKER ---
+                if d and 'Ticker' in d:
+                    # On nettoie le ticker (ex: MC.PA -> MC)
                     ticker_clean = str(d['Ticker']).split('.')[0].upper()
+                    nom_action_vue = d.get('Nom', ticker_clean) # On récupère le nom depuis le DataFrame
+                else:
+                    ticker_clean = "AAPL"
+                    nom_action_vue = "Apple"
 
-                # --- 2. AFFICHAGE ---
+                #  --- Affichage bouton DANS LA VUE DÉTAILLÉE ---
                 st.divider()
-                c_title, c_switch = st.columns([3, 1])
-                with c_title:
-                    st.subheader(f"📰 Dernières Actualités : {ticker_clean}")
-                with c_switch:
-                    # L'interrupteur magique
-                    mode_fr = st.toggle("🇫🇷", key="global_tr")
+                # Création d'une ligne avec Titre à gauche et Bouton à droite
+                col_titre, col_switch = st.columns([3, 1])
+                
+                with col_titre:
+                    st.markdown(f"### 📰 Dernières Actualités : {nom_action_vue}")
+                with col_switch:
+                    # On affiche le bouton ici aussi. 
+                    # TRÈS IMPORTANT : Utilise la même clé 'mode_fr' pour qu'ils soient synchronisés !
+                    mode_fr = st.toggle("FR", key="mode_fr_detail", help="Traduction automatique des titres en français", value=mode_fr)
+
+                # --- 2. COLLECTE ET TRI ---
                 all_news = get_quick_news(ticker_clean)
-                # Un seul tri
+
                 if all_news:
+                    # Tri chronologique robuste
                     all_news.sort(key=lambda x: x.get('dt_obj', datetime.now()), reverse=True)
                     
-            
-                # --- 3. TRAITEMENT ET DÉDUPLICATION ---
-                unique_news = []
-                titres_vus = set()
-
-                for article in all_news:
-                    # On normalise le titre pour la comparaison (minuscules et sans espaces)
-                    titre_norm = article.get('titre', '').lower().strip()
+                    unique_news = []
+                    titres_vus = set()
                     
-                    # Si le titre n'est pas un doublon, on l'ajoute
-                    if titre_norm not in titres_vus:
-                        unique_news.append(article)
-                        titres_vus.add(titre_norm)
+                    for article in all_news:
+                        t_brut = article.get('titre', '').lower().strip()
+                        if t_brut not in titres_vus:
+                            unique_news.append(article)
+                            titres_vus.add(t_brut)
 
-                # --- 4. BOUCLE D'AFFICHAGE ---
-                for article in unique_news[:15]: # Affichage des 15 meilleures news uniques
-                    icon_source = article.get('badge', '🌐')
-                    date_str = article.get('date', 'Auj.')
-                    titre = article.get('titre', 'Sans titre')
-                    lien = article.get('lien', '#')
-                    vrai_source = article.get('source', 'Analyse').strip().strip('()')
+                # --- 3. BOUCLE D'AFFICHAGE ---
+                for article in unique_news[:20]:
+                    
+                    lien_reel = article.get('lien', '#') 
+                    source = article.get('source', 'Info').strip('() ')
+                    date = article.get('date', 'Auj.')
+                    badge = article.get('badge', '🌐')
+                    titre_brut = article.get('titre', 'Sans titre')
+                    is_seeking = "seekingalpha.com" in lien_reel.lower()
+                    # Détection anglais
+                    mots_en = {'the', 'stock', 'growth', 'fed', 'market', 'earnings'}
+                    est_anglais = any(w in titre_brut.lower() for w in mots_en) or "seekingalpha" in lien_reel.lower()
+                    
+                    # On va chercher directement la clé "mode_fr" que nous avons définie dans le toggle
+                    mode_global_fr = st.session_state.get("mode_fr_detail", False)
+                    # Traduction automatique ou manuelle de titres grace au toggle global "Traduction Auto" (session_state.mode_fr) et au toggle local "Traduction FR" (mode_fr)
+                    if mode_global_fr and est_anglais:
+                        # SI LE TOGGLE EST ON : On traduit tout automatiquement
+                        titre_affiche = safe_translate(titre_brut)
+                    else:
+                        # SINON : On garde l'original
+                        titre_affiche = titre_brut
 
-                    # DÉTECTION DE LA LANGUE
-                    mots_titre = set(titre.lower().split())
-                    mots_cle_en = {'the', 'stock', 'growth', 'earnings', 'fed', 'buy', 'market', 'yield', 'price'}
-                    est_anglais = any(w in mots_cle_en for w in mots_titre) or "finviz" in lien.lower() or "seekingalpha" in lien.lower()
-                    is_seeking = "seekingalpha.com" in lien.lower()
-
-                    # TRADUCTION DU TITRE (Si mode_fr est ON et que c'est de l'anglais)
-                    titre_affiche = titre
+                    # Traduction
                     if mode_fr and est_anglais:
-                        titre_affiche = safe_translate(titre)
+                        titre_affiche = safe_translate(titre_brut)
+                    else:
+                        titre_affiche = titre_brut
 
-                    # Label de l'expander
-                    label = f"{icon_source} | **{date_str}** | {titre_affiche}"
+                    label = f"{badge} | **{date}** | {titre_affiche}"
 
                     with st.expander(label):
-                        # Affichage de l'original si traduit
-                        if mode_fr and est_anglais:
-                            st.caption(f"Original : {titre}")
-
-                        # Bouton de traduction individuelle (uniquement si Anglais et Mode Global OFF)
-                        if est_anglais and not mode_fr:
-                            if st.button("🔄 Traduire le titre", key=f"tr_{lien}"):
-                                st.info(f"🇫🇷 **FR :** {safe_translate(titre)}")
-
-                        st.write(f"**Origine :** {vrai_source}")
-
-                        # LOGIQUE DES BOUTONS DE LECTURE
+                        st.write(f"**Origine :** {source}")
+                        
                         if is_seeking or not est_anglais:
-                            # Bouton unique (Seeking Alpha ou Français)
-                            st.link_button("📖 Lire l'article complet", lien, use_container_width=True)
+                            # Article déjà en français
+                            st.link_button("📖 Lire l'article complet", lien_reel, use_container_width=True)
                         else:
-                            # Double bouton (Yahoo, Reuters...)
+                            # Article Anglais : Double bouton comme tu aimais
                             c1, c2 = st.columns(2)
                             with c1:
-                                st.link_button("📄 Original (EN)", lien, use_container_width=True)
+                                st.link_button("📄 Original (EN)", lien_reel, use_container_width=True)
                             with c2:
-                                url_t = f"https://translate.google.com/translate?sl=auto&tl=fr&u={lien}"
+                                # On affiche le bouton Google Translate pour toutes les autres sources
+                                url_t = f"https://translate.google.com/translate?sl=auto&tl=fr&u={lien_reel}"
                                 st.link_button("🇫🇷 Traduire Page", url_t, type="primary", use_container_width=True)
+                        
+                        if mode_fr and est_anglais:
+                            st.caption(f"Original : {titre_brut}")
