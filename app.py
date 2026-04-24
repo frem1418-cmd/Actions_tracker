@@ -724,26 +724,11 @@ if t_list:
         st.error(f"Erreur configuration colonnes : {e}")
         cols_base, cols_figees_base = ["Ticker", "Nom"], ["Ticker"]
 
-    # --- 4. ENRICHISSEMENT ET MODIFICATION DYNAMIQUE ---
-    with st.expander("🛠️ Personnaliser les colonnes affichées"):
-        # On permet d'ajouter n'importe quelle colonne du DF principal
-        toutes_les_cols = df.columns.tolist()
-        
-        selection_finale = st.multiselect(
-            "Colonnes actives :",
-            options=toutes_les_cols,
-            default=[c for c in cols_base if c in toutes_les_cols]
-        )
-        
-        # On permet de modifier quelles colonnes sont figées
-        selection_figee = st.multiselect(
-            "Colonnes à figer à gauche :",
-            options=selection_finale,
-            default=[c for c in cols_figees_base if c in selection_finale]
-        )
-
+   
     # --- 5. AFFICHAGE FINAL ---
     # On prépare la configuration "pinned" pour Streamlit
+    selection_finale = []
+    selection_figee = []
     config_colonnes = {col: st.column_config.Column(pinned=True) for col in selection_figee}
 
     
@@ -800,6 +785,24 @@ if t_list:
         else:
             st.info("La liste de tickers est vide.")
     else:
+         # --- 4. ENRICHISSEMENT ET MODIFICATION DYNAMIQUE ---
+        with st.expander("🛠️ Personnaliser les colonnes affichées"):
+            # On permet d'ajouter n'importe quelle colonne du DF principal
+            toutes_les_cols = df.columns.tolist()
+            
+            selection_finale = st.multiselect(
+                "Colonnes actives :",
+                options=toutes_les_cols,
+                default=[c for c in cols_base if c in toutes_les_cols]
+            )
+            
+            # On permet de modifier quelles colonnes sont figées
+            selection_figee = st.multiselect(
+                "Colonnes à figer à gauche :",
+                options=selection_finale,
+                default=[c for c in cols_figees_base if c in selection_finale]
+            )
+
         # Calcul dynamique : 35 pixels par ligne + 38 pixels pour l'en-tête
         hauteur_dynamique = (len(df) * 35) + 38
         sel = st.dataframe(
