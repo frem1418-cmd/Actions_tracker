@@ -158,10 +158,57 @@ def get_quick_news(ticker):
                     })
             
         except:  return []           
+    
+    # --- 4. Benzinga US ---
+    def fetch_benzinga(ticker=""):
+        #Récupère les news de Benzinga via flux RSS
+        news_list = []
+        # Flux RSS principal (on peut filtrer par ticker dans le titre plus tard)
+        rss_url = "https://www.benzinga.com/markets/feed"
+        headers = {
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                }
+        try:
+            r = requests.get(rss_url, headers=headers, timeout=5)
+            feed = feedparser.parse(r.text)
+            
+            for e in feed.entries:
+                dt_obj = datetime(*e.published_parsed[:6])
+                display_date = dt_obj.strftime("%d/%m %H:%M")
+                clean_title = e.title.strip()
+                
+                # --- CALCUL DU SENTIMENT (Comme sur ton image c73910) ---
+                from textblob import TextBlob
+                analysis = TextBlob(clean_title)
+                pol = analysis.sentiment.polarity
+                icon = "🟢" if pol > 0.1 else "🔴" if pol < -0.1 else "⚪"
+
+                # FILTRAGE : Si pas de ticker, on prend tout. Si ticker, on cherche dans le titre.
+                if not ticker or ticker.lower() in clean_title.lower():
+                    news_list.append({
+                        'dt_obj': dt_obj,
+                        'date': display_date,
+                        'titre': clean_title,
+                        'lien': e.link,
+                        'source': 'Benzinga',
+                        'badge': f"{icon} ⚡ Benzinga",
+                        'ticker_parent': ticker.upper() if ticker else ""
+                    })
+        except Exception as ex:
+            st.error(f"Erreur Benzinga : {ex}")
+            
+        return news_list
+        
+    
     # 2. EXÉCUTION EN PARALLÈLE
     with ThreadPoolExecutor(max_workers=3) as executor:
         # On lance tout en même temps
-        futures = [executor.submit(fetch_google), executor.submit(fetch_finviz), executor.submit(fetch_seeking)]
+        futures = [
+            executor.submit(fetch_google),
+            executor.submit(fetch_finviz),
+            executor.submit(fetch_seeking),
+            executor.submit(fetch_benzinga, ticker)
+            ]
         
         for future in futures:
             try:
@@ -232,15 +279,15 @@ def actualite_module(liste_tickers):
     
     with col_trad:
         # Toggle pour la traduction globale
-        #st.session_state.mode_fr = st.toggle("🇫🇷", value=st.session_state.get('mode_fr', False))
-        mode_global_fr = st.toggle("🇫🇷", key="mode_fr")
+        st.session_state.mode_fr = st.toggle("🇫🇷", value=st.session_state.get('mode_fr', False), help="Traduction des titres en français")
+        #mode_global_fr = st.toggle("🇫🇷", key="mode_fr")
     
     with col_ref:
         # Bouton refresh compact
         if st.button("🔄", help="Actualiser le flux", key="refresh_news_final"):
             get_quick_news.clear()  # Efface le cache des news pour forcer la récupération de nouvelles données
             st.rerun(scope="fragment")
-
+    
     # --- 2. COLLECTE ET DÉDUPLICATION ---
     all_news = []
     for t in liste_tickers:
