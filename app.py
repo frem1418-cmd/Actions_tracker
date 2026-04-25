@@ -40,9 +40,9 @@ def get_quick_news(ticker):
     def fetch_google():
         try:
             # On cherche en français pour avoir les actualités locales
-            url = f"https://news.google.com/rss/search?q={t_clean}+bourse&hl=fr&gl=FR&ceid=FR:fr"
+            #url = f"https://news.google.com/rss/search?q={t_clean}+bourse&hl=fr&gl=FR&ceid=FR:fr"
             # On cherche en anglais pour avoir Benzinga/Reuters
-            #url = f"https://news.google.com/rss/search?q={t_clean}+stock+news&hl=en-US&gl=US&ceid=US:en"
+            url = f"https://news.google.com/rss/search?q={t_clean}+stock+news&hl=en-US&gl=US&ceid=US:en"
             f = feedparser.parse(url)
             for e in f.entries[:]:
                 pol = TextBlob(e.title).sentiment.polarity
