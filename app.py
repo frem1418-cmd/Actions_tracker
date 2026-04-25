@@ -228,7 +228,7 @@ def actualite_module(liste_tickers):
     
     with col_search:
         # Champ de recherche discret
-        query = st.text_input("🔍 Rechercher...", placeholder="Action, mot-clé...", label_visibility="collapsed").lower().strip()
+        query = st.text_input("🔍 Rechercher...", placeholder="Action, mot-clé...", label_visibility="collapsed",key="search_news_detail").lower().strip()
     
     with col_trad:
         # Toggle pour la traduction globale
@@ -1045,7 +1045,7 @@ if t_list:
                         a for a in unique_news 
                         if q in a.get('titre', '').lower() or q in a.get('source', '').lower()
                     ]
-                    
+
                 # --- 3. BOUCLE D'AFFICHAGE ---
                 for article in unique_news[:20]:
                     
