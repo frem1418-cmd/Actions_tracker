@@ -228,7 +228,7 @@ def actualite_module(liste_tickers):
     
     with col_search:
         # Champ de recherche discret
-        query = st.text_input("🔍 Rechercher...", placeholder="Action, mot-clé...", label_visibility="collapsed",key="search_news_detail").lower().strip()
+        query = st.text_input("🔍 Rechercher...", placeholder="Action, mot-clé...", label_visibility="collapsed",key="main_search_key").lower().strip()
     
     with col_trad:
         # Toggle pour la traduction globale
@@ -1036,7 +1036,7 @@ if t_list:
                             unique_news.append(article)
                             titres_vus.add(t_brut)
                 
-                query = st.session_state.get("search_news_detail", "") # Si tu as une barre de recherche
+                query = st.session_state.get("main_search_key", "") # Si tu as une barre de recherche
 
                 if query:
                     q = query.lower()
