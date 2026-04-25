@@ -39,6 +39,7 @@ def get_quick_news(ticker):
     # --- 1. Google News FR ---
     def fetch_google():
         try:
+            # On cherche en français pour avoir les actualités locales
             url = f"https://news.google.com/rss/search?q={t_clean}+bourse&hl=fr&gl=FR&ceid=FR:fr"
             # On cherche en anglais pour avoir Benzinga/Reuters
             #url = f"https://news.google.com/rss/search?q={t_clean}+stock+news&hl=en-US&gl=US&ceid=US:en"
