@@ -1035,7 +1035,17 @@ if t_list:
                         if t_brut not in titres_vus:
                             unique_news.append(article)
                             titres_vus.add(t_brut)
+                
+                query = st.session_state.get("search_news_detail", "") # Si tu as une barre de recherche
 
+                if query:
+                    q = query.lower()
+                    # On filtre la liste unique_news selon la saisie
+                    unique_news = [
+                        a for a in unique_news 
+                        if q in a.get('titre', '').lower() or q in a.get('source', '').lower()
+                    ]
+                    
                 # --- 3. BOUCLE D'AFFICHAGE ---
                 for article in unique_news[:20]:
                     
