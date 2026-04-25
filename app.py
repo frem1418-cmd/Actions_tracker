@@ -1018,7 +1018,7 @@ if t_list:
                 with col_switch:
                     # On affiche le bouton ici aussi. 
                     # TRÈS IMPORTANT : Utilise la même clé 'mode_fr' pour qu'ils soient synchronisés !
-                    mode_fr = st.toggle("FR", key="mode_fr_detail", help="Traduction automatique des titres en français", value=mode_fr)
+                    mode_fr = st.toggle("FR", help="Traduction automatique des titres en français", value=mode_fr)
 
                 # --- 2. COLLECTE ET TRI ---
                 all_news = get_quick_news(ticker_clean)
@@ -1059,7 +1059,6 @@ if t_list:
                     # Détection anglais
                     mots_en = {'the', 'stock', 'growth', 'fed', 'market', 'earnings'}
                     est_anglais = any(w in titre_brut.lower() for w in mots_en) or "seekingalpha" in lien_reel.lower()
-                    
                     
                     # Traduction
                     if mode_fr and est_anglais:
