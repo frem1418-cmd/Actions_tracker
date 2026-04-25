@@ -39,24 +39,33 @@ def get_quick_news(ticker):
     # --- 1. Google News FR ---
     def fetch_google():
         try:
-            # On cherche en français pour avoir les actualités locales
-            url = f"https://news.google.com/rss/search?q={t_clean}+bourse&hl=fr&gl=FR&ceid=FR:fr"
-            # On cherche en anglais pour avoir Benzinga/Reuters
-            #url = f"https://news.google.com/rss/search?q={t_clean}+stock+news&hl=en-US&gl=US&ceid=US:en"
+            # Si le ticker d'origine (ticker) contient '.PA', on cherche en France
+            if '.PA' in ticker.upper():
+                url = f"https://news.google.com/rss/search?q={t_clean}+bourse&hl=fr&gl=FR&ceid=FR:fr"
+            else:
+                # Sinon (US), on cherche en anglais pour avoir Benzinga/Reuters/Bloomberg
+                url = f"https://news.google.com/rss/search?q={t_clean}+stock+news&hl=en-US&gl=US&ceid=US:en"
+            
             f = feedparser.parse(url)
-            for e in f.entries[:]:
+            
+            # On prend les 10 premiers résultats pour éviter de surcharger le module et avoir de la diversite
+            for e in f.entries[:10]:
                 pol = TextBlob(e.title).sentiment.polarity
                 icon = "🟢" if pol > 0.1 else "🔴" if pol < -0.1 else "⚪"
+                #Gestion de la date
                 raw_pub = e.published
                 day_month = raw_pub[5:11] # "21 Apr"
                 hour = raw_pub[17:22]    # "10:30"
-                
                 # Si c'est aujourd'hui, on remplace par Today
                 display_date = f"Today {hour}" if day_month == today_str else f"{day_month} {hour}"
                 
-                # On stocke aussi l'objet datetime pour le tri final
-                dt_obj = datetime.strptime(raw_pub[5:25], "%d %b %Y %H:%M:%S")
-                # Le titre Google est souvent : "Titre de l'article - Nom du Média"
+                # Conversion en objet datetime pour le tri final
+                try:
+                    dt_obj = datetime.strptime(raw_pub[5:25], "%d %b %Y %H:%M:%S")
+                except:
+                    dt_obj = datetime.now()
+
+                # Nettoyage du titre et de la source
                 parts = e.title.rsplit(' - ', 1)
                 clean_title = parts[0]
                 source_name = parts[1] if len(parts) > 1 else "Google News"
@@ -64,10 +73,12 @@ def get_quick_news(ticker):
                 news_list.append({
                     'dt_obj': dt_obj,
                     'date': display_date,
-                    'titre': e.title, 'lien': e.link, 'badge': f"{icon} 🌐",
+                    'titre': clean_title, 'lien': e.link, 'badge': f"{icon} 🌐",
                     'source': source_name
                 })
-        except: return []
+        except Exception as err:
+            print(f"Erreur Google News pour {t_clean}: {err}")
+            return []
 
     # --- 2. Finviz US ---
     def fetch_finviz():
