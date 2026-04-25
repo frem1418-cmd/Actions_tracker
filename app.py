@@ -1036,7 +1036,8 @@ if t_list:
                             unique_news.append(article)
                             titres_vus.add(t_brut)
                 
-     
+                query = st.session_state.get("search_news_detail", "") # Si tu as une barre de recherche
+
                 if query:
                     q = query.lower()
                     unique_news = [
