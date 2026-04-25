@@ -166,7 +166,7 @@ def get_quick_news(ticker):
         # Flux RSS principal (on peut filtrer par ticker dans le titre plus tard)
         rss_url = "https://www.benzinga.com/markets/feed"
         headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
                 }
         try:
             r = requests.get(rss_url, headers=headers, timeout=5)
