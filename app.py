@@ -1036,8 +1036,7 @@ if t_list:
                             unique_news.append(article)
                             titres_vus.add(t_brut)
                 
-                query = st.session_state.get("main_search_key", "") # Si tu as une barre de recherche
-
+                
                 if query:
                     q = query.lower()
                     unique_news = [
@@ -1060,16 +1059,7 @@ if t_list:
                     mots_en = {'the', 'stock', 'growth', 'fed', 'market', 'earnings'}
                     est_anglais = any(w in titre_brut.lower() for w in mots_en) or "seekingalpha" in lien_reel.lower()
                     
-                    # On va chercher directement la clé "mode_fr" que nous avons définie dans le toggle
-                    mode_global_fr = st.session_state.get("mode_fr_detail", False)
-                    # Traduction automatique ou manuelle de titres grace au toggle global "Traduction Auto" (session_state.mode_fr) et au toggle local "Traduction FR" (mode_fr)
-                    if mode_global_fr and est_anglais:
-                        # SI LE TOGGLE EST ON : On traduit tout automatiquement
-                        titre_affiche = safe_translate(titre_brut)
-                    else:
-                        # SINON : On garde l'original
-                        titre_affiche = titre_brut
-
+                    
                     # Traduction
                     if mode_fr and est_anglais:
                         titre_affiche = safe_translate(titre_brut)
