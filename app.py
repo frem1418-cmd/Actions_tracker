@@ -13,6 +13,7 @@ import streamlit as st
 from streamlit_gsheets import GSheetsConnection
 from deep_translator import GoogleTranslator
 from concurrent.futures import ThreadPoolExecutor
+import urllib.parse
 
 # Initialisation de la connexion (à faire une seule fois)
 conn = st.connection("gsheets", type=GSheetsConnection)
@@ -1128,7 +1129,9 @@ if t_list:
                                 st.link_button("📄 Original (EN)", lien_reel, use_container_width=True)
                             with c2:
                                 # On affiche le bouton Google Translate pour toutes les autres sources
-                                url_t = f"https://translate.google.com/translate?sl=auto&tl=fr&u={lien_reel}"
+                                lien_propre = urllib.parse.quote(lien_reel, safe='')
+                                url_t = f"https://translate.google.com/translate?sl=auto&tl=fr&u={lien_propre}"
+                                #url_t = f"https://translate.google.com/translate?sl=auto&tl=fr&u={lien_reel}"
                                 st.link_button("🇫🇷 Traduire Page", url_t, type="primary", use_container_width=True)
                         
                         if mode_fr and est_anglais:
