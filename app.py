@@ -18,6 +18,30 @@ import urllib.parse
 # Initialisation de la connexion (à faire une seule fois)
 conn = st.connection("gsheets", type=GSheetsConnection)
 
+# --- FONCTION DE CHARGEMENT DES WATCHLISTS DEPUIS GOOGLE SHEETS ---
+def load_watchlist_sheets(watchlist_name):
+    try:
+        conn = st.connection("gsheets", type=GSheetsConnection)
+        df = conn.read(worksheet="Watchlists") # Nom de ton onglet Google Sheets
+        # On cherche la ligne qui correspond au nom de la liste
+        row = df[df['list_name'] == watchlist_name]
+        if not row.empty:
+            return row.iloc[0]['tickers']
+        return ""
+    except Exception as e:
+        st.error(f"Erreur Sheets: {e}")
+        return ""
+    
+# --- FONCTION DE SAUVEGARDE DES WATCHLISTS VERS GOOGLE SHEETS ---    
+def update_tickers_callback():
+    # On récupère le texte saisi dans le text_area via sa clé
+    new_val = st.session_state["ticker_editor"].upper()
+    # On sauvegarde dans GSheets
+    save_watchlist_gsheets(sel_list, new_val)
+    # On vide le cache pour que le tableau se mette à jour avec les nouveaux cours
+    st.cache_data.clear()
+# --- 1. CONFIGURATION & DOSSIERS ---
+
 # Fonction de traduction sécurisée avec cache pour éviter les appels redondants
 @st.cache_data(ttl=3600)
 def safe_translate(text):
@@ -141,7 +165,7 @@ def get_quick_news(ticker):
             
             if r_sa.status_code == 200:
                 f_sa = feedparser.parse(r_sa.text)
-                for entry in f_sa.entries[:5]:
+                for entry in f_sa.entries[:3]:
                     # Calcul du sentiment pour la pastille
                     pol = TextBlob(entry.title).sentiment.polarity
                     icon = "🟢" if pol > 0.1 else "🔴" if pol < -0.1 else "⚪"
@@ -202,7 +226,7 @@ def get_quick_news(ticker):
         
     
     # 2. EXÉCUTION EN PARALLÈLE
-    with ThreadPoolExecutor(max_workers=3) as executor:
+    with ThreadPoolExecutor(max_workers=10) as executor:
         # On lance tout en même temps
         futures = [
             executor.submit(fetch_google),
@@ -235,13 +259,61 @@ def get_quick_news(ticker):
         else:
             item['date'] = dt.strftime('%d/%m %H:%M')
     return news_list
-# ---  FONCTIONS de rafraichissement de news ---
-@st.cache_data(ttl=86400) # Cache le nom 24h
-def get_action_name(ticker):
+
+# --- FONCTIONS pour sauvegarder TICKERS & NOMS DANS GOOGLE SHEETS ---
+def save_new_ticker_to_sheet(ticker, name):    
     try:
-        return yf.Ticker(ticker).info.get('longName', ticker)
+        # On lit le contenu actuel
+        df_current = conn.read(worksheet="Tickers_Data")
+        
+        # Sécurité : On vérifie si le ticker n'a pas été ajouté entre temps
+        if ticker not in df_current['ticker'].values:
+            new_row = pd.DataFrame([[ticker, name]], columns=['ticker', 'name'])
+            df_updated = pd.concat([df_current, new_row], ignore_index=True)
+            
+            # On met à jour le Google Sheet
+            conn.update(worksheet="Tickers_Data", data=df_updated)
+            
+            # IMPORTANT : On vide le cache de lecture pour que la prochaine 
+            # exécution de load_tickers_names() voie la nouvelle ligne
+            st.cache_data.clear()
+    except Exception as e:
+        st.error(f"Erreur d'écriture GSheet : {e}")
+
+# --- CHARGEMENT DES NOMS des actions DEPUIS GOOGLE SHEETS ---
+@st.cache_data(ttl=3600)  # On rafraîchit toutes les heures seulement
+def load_tickers_names():
+    try:        
+        # On lit l'onglet où tu stockes les correspondances Ticker -> Nom
+        df_names = conn.read(worksheet="Tickers_Data") 
+        # On transforme ça en dictionnaire { 'AAPL': 'Apple Inc.', ... }
+        return pd.Series(df_names.name.values, index=df_names.ticker).to_dict()
     except:
-        return ticker
+        return {}
+
+# On charge le dictionnaire une fois
+TICKER_NAMES_MAP = load_tickers_names()
+
+
+# ---  FONCTIONS de rafraichissement de news ---
+def get_action_name(ticker):
+    # 1. On vérifie dans le dictionnaire local (chargé du Sheet)
+    if ticker in TICKER_NAMES_MAP:
+        return TICKER_NAMES_MAP[ticker]
+    
+    # 2. Si PAS dans le Sheet, on fait l'appel Yahoo (une seule fois !)
+    try:
+        t = yf.Ticker(ticker)
+        long_name = t.info.get('longName', ticker.upper())
+        
+        # 3. ON ENREGISTRE DANS LE SHEET POUR LE FUTUR
+        save_new_ticker_to_sheet(ticker, long_name)
+        
+        # On l'ajoute aussi au dictionnaire en mémoire pour cette session
+        TICKER_NAMES_MAP[ticker] = long_name
+        return long_name
+    except:
+        return ticker.upper()
     
 @st.fragment(run_every="5m") # S'actualise seul toutes les 5 minutes
 def news_dashboard_module(liste_tickers):
@@ -342,29 +414,7 @@ def actualite_module(liste_tickers):
     else:
         st.info("Aucune actualité ne correspond à votre recherche.")
 
-# --- FONCTION DE CHARGEMENT DES WATCHLISTS DEPUIS GOOGLE SHEETS ---
-def load_watchlist_sheets(watchlist_name):
-    try:
-        conn = st.connection("gsheets", type=GSheetsConnection)
-        df = conn.read(worksheet="Watchlists") # Nom de ton onglet Google Sheets
-        # On cherche la ligne qui correspond au nom de la liste
-        row = df[df['list_name'] == watchlist_name]
-        if not row.empty:
-            return row.iloc[0]['tickers']
-        return ""
-    except Exception as e:
-        st.error(f"Erreur Sheets: {e}")
-        return ""
-    
-# --- FONCTION DE SAUVEGARDE DES WATCHLISTS VERS GOOGLE SHEETS ---    
-def update_tickers_callback():
-    # On récupère le texte saisi dans le text_area via sa clé
-    new_val = st.session_state["ticker_editor"].upper()
-    # On sauvegarde dans GSheets
-    save_watchlist_gsheets(sel_list, new_val)
-    # On vide le cache pour que le tableau se mette à jour avec les nouveaux cours
-    st.cache_data.clear()
-# --- 1. CONFIGURATION & DOSSIERS ---
+
 
 # --- 2. RÉFÉRENTIELS ---
 SECTORS_FR = {
