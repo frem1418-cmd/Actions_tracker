@@ -8,6 +8,7 @@ from textblob import TextBlob
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import requests
+import time
 from bs4 import BeautifulSoup
 import streamlit as st
 from streamlit_gsheets import GSheetsConnection
@@ -18,29 +19,32 @@ import urllib.parse
 # Initialisation de la connexion (à faire une seule fois)
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# --- FONCTION DE CHARGEMENT DES WATCHLISTS DEPUIS GOOGLE SHEETS ---
-def load_watchlist_sheets(watchlist_name):
-    try:
-        conn = st.connection("gsheets", type=GSheetsConnection)
-        df = conn.read(worksheet="Watchlists") # Nom de ton onglet Google Sheets
-        # On cherche la ligne qui correspond au nom de la liste
-        row = df[df['list_name'] == watchlist_name]
-        if not row.empty:
-            return row.iloc[0]['tickers']
-        return ""
-    except Exception as e:
-        st.error(f"Erreur Sheets: {e}")
-        return ""
+@st.cache_data(ttl=900) # On garde en mémoire 15 min
+def get_bundle_news(liste_tickers, ticker_to_name=None):
+    if ticker_to_name is None:
+        ticker_to_name = {} # Dico vide par défaut
+    all_news_combined = []
     
-# --- FONCTION DE SAUVEGARDE DES WATCHLISTS VERS GOOGLE SHEETS ---    
-def update_tickers_callback():
-    # On récupère le texte saisi dans le text_area via sa clé
-    new_val = st.session_state["ticker_editor"].upper()
-    # On sauvegarde dans GSheets
-    save_watchlist_gsheets(sel_list, new_val)
-    # On vide le cache pour que le tableau se mette à jour avec les nouveaux cours
-    st.cache_data.clear()
-# --- 1. CONFIGURATION & DOSSIERS ---
+    # On lance la récupération pour TOUS les tickers en même temps (max 15 threads)
+    with ThreadPoolExecutor(max_workers=15) as executor:
+        # On crée un dictionnaire pour suivre quel thread correspond à quel ticker
+        future_to_ticker = {executor.submit(get_quick_news, t): t for t in liste_tickers}
+        
+        for future in future_to_ticker:
+            ticker_parent = future_to_ticker[future]
+            try:
+                articles = future.result(timeout=10) # 10s max par ticker
+                if articles:
+                    for a in articles:
+                        # On injecte le ticker d'origine dans chaque news pour savoir d'où elle vient
+                        a['ticker_parent'] = ticker_parent
+                        a['nom_propre'] = ticker_to_name.get(ticker_parent, ticker_parent)
+                        all_news_combined.append(a)
+            except Exception as e:
+                print(f"Erreur sur {ticker_parent}: {e}")
+                continue
+                
+    return all_news_combined
 
 # Fonction de traduction sécurisée avec cache pour éviter les appels redondants
 @st.cache_data(ttl=3600)
@@ -52,193 +56,148 @@ def safe_translate(text):
     except:
         return text
 
+@st.cache_data(ttl=3600)
+# Fonction de traduction en batch pour les titres (plus rapide que de traduire un par un)
+def translate_batch(titles_list):
+    if not titles_list:
+        return []
+    try:
+        # On fusionne les titres avec un séparateur que le traducteur respecte
+        combined_text = " ||| ".join(titles_list)
+        translated_text = GoogleTranslator(source='auto', target='fr').translate(combined_text)
+        
+        # On redécoupe pour récupérer chaque titre individuel
+        translated_list = [t.strip() for t in translated_text.split("|||")]
+        
+        # Sécurité : si le nombre de titres ne correspond pas, on renvoie l'original
+        if len(translated_list) != len(titles_list):
+            return titles_list
+            
+        return translated_list
+    except Exception as e:
+        print(f"Erreur batch translation: {e}")
+        return titles_list
    
 #Fonction pour récupérer les news et analyser le sentiment
 @st.cache_data(ttl=900) # Les news sont gardées en mémoire 15 min
 def get_quick_news(ticker):
     news_list = []
     t_clean = ticker.split('.')[0].strip().upper()
-    # On récupère la date du jour au format Google pour comparer
-    # ex: "21 Apr"
+    # On récupère la date du jour au format Google pour comparer    
     today_str = datetime.now().strftime("%d %b")
     # --- 1. Google News FR ---
-    def fetch_google():
-        try:
-            # Si le ticker d'origine (ticker) contient '.PA', on cherche en France
-            if '.PA' in ticker.upper():
-                url = f"https://news.google.com/rss/search?q={t_clean}+bourse&hl=fr&gl=FR&ceid=FR:fr"
-            else:
-                # Sinon (US), on cherche en anglais pour avoir Benzinga/Reuters/Bloomberg
-                url = f"https://news.google.com/rss/search?q={t_clean}+stock+news&hl=en-US&gl=US&ceid=US:en"
-            
-            f = feedparser.parse(url)
-            
-            # On prend les 10 premiers résultats pour éviter de surcharger le module et avoir de la diversite
-            for e in f.entries[:10]:
-                pol = TextBlob(e.title).sentiment.polarity
-                icon = "🟢" if pol > 0.1 else "🔴" if pol < -0.1 else "⚪"
-                #Gestion de la date
-                raw_pub = e.published
-                day_month = raw_pub[5:11] # "21 Apr"
-                hour = raw_pub[17:22]    # "10:30"
-                # Si c'est aujourd'hui, on remplace par Today
-                display_date = f"Today {hour}" if day_month == today_str else f"{day_month} {hour}"
-                
-                # Conversion en objet datetime pour le tri final
-                try:
-                    dt_obj = datetime.strptime(raw_pub[5:25], "%d %b %Y %H:%M:%S")
-                except:
-                    dt_obj = datetime.now()
 
-                # Nettoyage du titre et de la source
-                parts = e.title.rsplit(' - ', 1)
-                clean_title = parts[0]
-                source_name = parts[1] if len(parts) > 1 else "Google News"
-
-                news_list.append({
-                    'dt_obj': dt_obj,
-                    'date': display_date,
-                    'titre': clean_title, 'lien': e.link, 'badge': f"{icon} 🌐",
-                    'source': source_name
-                })
-        except Exception as err:
-            print(f"Erreur Google News pour {t_clean}: {err}")
-            return []
-
-    # --- 2. Finviz US ---
-    def fetch_finviz():
-        try:
-            session = requests.Session()
-            h = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-            }
-            r = requests.get(f"https://finviz.com/quote.ashx?t={t_clean}", headers=h, timeout=5)
-            if r.status_code == 200:
-                soup = BeautifulSoup(r.content, 'html.parser')
-                table = soup.find(id='news-table')
-                if table:
-                    last_dt_raw = ""
-                    for row in table.findAll('tr')[:5]:
-                        tds = row.findAll('td')
-                        raw_dt = tds[0].get_text(strip=True)
-                        
-                        if " " in raw_dt:
-                            date_part = raw_dt.split(' ')[0] 
-                            tm_12h = raw_dt.split(' ')[1] # ex: "10:00PM"
-                            last_dt_raw = date_part
-                        else:
-                            tm_12h = raw_dt
-                            date_part = last_dt_raw
-                        
-                        # Conversion de l'heure AM/PM en 24h
-                        # On crée un objet time pour transformer 10:00PM en 22:00
-                        time_obj = datetime.strptime(tm_12h, "%I:%M%p")
-                        hour_24 = time_obj.strftime("%H:%M")
-
-                        if date_part == "Today":
-                            dt_obj = datetime.combine(datetime.now().date(), time_obj.time())
-                            display_date = f"Today {hour_24}"
-                        else:
-                            parts = date_part.split("-") # "Apr-20-26"
-                            display_date = f"{parts[1]} {parts[0]} {hour_24}"
-                            dt_obj = datetime.strptime(f"{date_part} {tm_12h}", "%b-%d-%y %I:%M%p")
-                        # On cherche le texte dans la cellule de la source (généralement un <span>)
-                        source_element = row.find('span')
-                        source_finviz = source_element.text.strip() if source_element else "Finviz"
-
-                        t_text = row.a.get_text()
-                        icon = "🟢" if TextBlob(t_text).sentiment.polarity > 0.1 else "🔴" if TextBlob(t_text).sentiment.polarity < -0.1 else "⚪"
-                        news_list.append({
-                            'dt_obj': dt_obj, 'date': display_date,
-                            'titre': t_text, 'lien': row.a['href'], 'badge': f"{icon} 📈", 
-                            'source': source_finviz
-                        })
-        except: return []
-    # --- 3. Seeking Alpha US ---
-    def fetch_seeking():
-        try:
-            rss_url = f"https://seekingalpha.com/symbol/{t_clean}/feed"
-            headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-                }
-            r_sa = requests.get(rss_url, headers=headers, timeout=5)
-            
-            if r_sa.status_code == 200:
-                f_sa = feedparser.parse(r_sa.text)
-                for entry in f_sa.entries[:3]:
-                    # Calcul du sentiment pour la pastille
-                    pol = TextBlob(entry.title).sentiment.polarity
-                    icon = "🟢" if pol > 0.1 else "🔴" if pol < -0.1 else "⚪"
-                    
-                    # Parsing de la date
-                    dt_obj = datetime.strptime(entry.published[:25].strip(), '%a, %d %b %Y %H:%M:%S') + timedelta(hours=6)
-                    
-                    news_list.append({
-                        'dt_obj': dt_obj,
-                        'date': dt_obj.strftime('%d/%m %H:%M'),
-                        'titre': entry.title,
-                        'lien': entry.link,
-                        'badge': f"{icon} :orange[[α]]", # Badge spécifique pour repérer les analyses
-                        'source': "Seeking Alpha US"
-                    })
-            
-        except:  return []           
-    
-    # --- 4. Benzinga US ---
-    def fetch_benzinga(ticker=""):
-        #Récupère les news de Benzinga via flux RSS
+    # On utilise une fonction de parsing unique pour tous les flux Google (FR/US) en passant le badge en paramètre
+    def process_general_google(url, badge_icon, default_source="Info", limit=10):
         news_list = []
-        # Flux RSS principal (on peut filtrer par ticker dans le titre plus tard)
-        rss_url = "https://www.benzinga.com/markets/feed"
-        headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36'
-                }
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
         try:
-            r = requests.get(rss_url, headers=headers, timeout=5)
-            feed = feedparser.parse(r.text)
-            
-            for e in feed.entries:
-                dt_obj = datetime(*e.published_parsed[:6])
-                display_date = dt_obj.strftime("%d/%m %H:%M")
-                clean_title = e.title.strip()
-                
-                # --- CALCUL DU SENTIMENT (Comme sur ton image c73910) ---
-                from textblob import TextBlob
-                analysis = TextBlob(clean_title)
-                pol = analysis.sentiment.polarity
-                icon = "🟢" if pol > 0.1 else "🔴" if pol < -0.1 else "⚪"
+            r = requests.get(url, headers=headers, timeout=5)
+            if r.status_code == 200:
+                feed = feedparser.parse(r.text)
+                # Utilisation de la variable 'limit
+                for e in feed.entries[:limit]:
+                    # --- NETTOYAGE TITRE ET SOURCE  ---
+                    parts = e.title.rsplit(' - ', 1)
+                    clean_title = parts[0]
+                    source_name = parts[1] if len(parts) > 1 else default_source
+                    
+                    # --- ANALYSE SENTIMENT  ---
+                    pol = TextBlob(clean_title).sentiment.polarity
+                    sentiment_label = "Positif" if pol > 0.1 else "Négatif" if pol < -0.1 else "Neutre"
+                    icon_sent = "🟢" if pol > 0.1 else "🔴" if pol < -0.1 else "⚪"
 
-                # FILTRAGE : Si pas de ticker, on prend tout. Si ticker, on cherche dans le titre.
-                if not ticker or ticker.lower() in clean_title.lower():
+                    try:
+                        dt_obj = datetime(*e.published_parsed[:6])
+                    except:
+                        dt_obj = datetime.now()
+
                     news_list.append({
                         'dt_obj': dt_obj,
-                        'date': display_date,
                         'titre': clean_title,
                         'lien': e.link,
-                        'source': 'Benzinga',
-                        'badge': f"{icon} ⚡ Benzinga",
-                        'ticker_parent': ticker.upper() if ticker else ""
+                        'source': source_name,
+                        'badge': f"{icon_sent} {badge_icon}", # Ex: 🟢 💎
+                        'sentiment': sentiment_label
                     })
-        except Exception as ex:
-            st.error(f"Erreur Benzinga : {ex}")
-            
+        except: 
+            pass
         return news_list
-        
     
-    # 2. EXÉCUTION EN PARALLÈLE
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        # On lance tout en même temps
-        futures = [
-            executor.submit(fetch_google),
-            executor.submit(fetch_finviz),
-            executor.submit(fetch_seeking),
-            executor.submit(fetch_benzinga, ticker)
-            ]
-        
+    def fetch_google_fr(t_clean):
+        url = f"https://news.google.com/rss/search?q={t_clean}+bourse&hl=fr&gl=FR&ceid=FR:fr"
+        return process_general_google(url, "🇫🇷")
+
+    def fetch_google_us(t_clean):
+        url = f"https://news.google.com/rss/search?q={t_clean}+stock+news&hl=en-US&gl=US&ceid=US:en"
+        return process_general_google(url, "🌐")
+
+    def fetch_google_agencies(t_clean):
+        # Requête groupée pour Bloomberg et Reuters
+        url = f"https://news.google.com/rss/search?q={t_clean}+source:Bloomberg+OR+source:Reuters&hl=en-US"
+        return process_general_google(
+            url, 
+            badge_icon="💎"
+            )
+
+
+    def fetch_google_wires(t_clean):
+        # Requête pour les communiqués officiels
+        url = f"https://news.google.com/rss/search?q={t_clean}+source:PR_Newswire+OR+source:Business_Wire&hl=en-US"
+        return process_general_google(
+            url,
+            badge_icon="📄",
+            limit=20
+            )
+    
+    def fetch_benzinga_fixed(t_clean):
+        # Correction de l'URL Benzinga suite à ton erreur 404 (Image 92a4b3)
+        #url = f"https://www.benzinga.com/stock/{t_clean}/rss"
+        url = "https://www.benzinga.com/markets/feed"
+        return process_general_google(url, "⚡ Benzinga", default_source="Benzinga")
+
+    # --- Seeking Alpha US ---
+    def fetch_seeking(t_clean):
+        #Récupère les analyses de Seeking Alpha"""
+        news_list = []
+        # URL spécifique au ticker
+        url = f"https://seekingalpha.com/symbol/{t_clean}/feed"
+         # On appelle le moteur avec le badge spécifique 🧡
+        return process_general_google(
+            url, 
+            badge_icon="[:orange[a]]", 
+            default_source="Seeking Alpha",
+            limit=3
+            )
+    
+    # EXÉCUTION EN PARALLÈLE
+    @st.cache_data(ttl=900)
+    def get_quick_news(ticker):
+        news_list = []
+
+        t_clean = ticker.split('.')[0].strip().upper() #t_clean = ticker.split('.')[0].strip().upper()
+
+    # 1. Liste des fonctions à appeler
+    tasks = []
+    if '.PA' in ticker.upper():
+        tasks.append(fetch_google_fr) #
+    else:
+        # On ajoute toutes les sources US en parallèle
+        tasks.extend([
+            fetch_google_us,
+            fetch_google_agencies,
+            fetch_google_wires,
+            fetch_benzinga_fixed, #
+            fetch_seeking         
+        ])
+
+    # 2. Exécution simultanée (Vitesse maximale)
+    with ThreadPoolExecutor(max_workers=len(tasks)) as executor:
+        # Ici, toutes les fonctions reçoivent t_clean
+        futures = [executor.submit(task, t_clean) for task in tasks]
         for future in futures:
             try:
-                # On récupère les résultats (max 4s d'attente par source)
-                news_list.extend(future.result(timeout=4))
+                news_list.extend(future.result(timeout=10)) # Timeout augmenté pour SA
             except:
                 continue
 
@@ -259,63 +218,15 @@ def get_quick_news(ticker):
         else:
             item['date'] = dt.strftime('%d/%m %H:%M')
     return news_list
-
-# --- FONCTIONS pour sauvegarder TICKERS & NOMS DANS GOOGLE SHEETS ---
-def save_new_ticker_to_sheet(ticker, name):    
-    try:
-        # On lit le contenu actuel
-        df_current = conn.read(worksheet="Tickers_Data")
-        
-        # Sécurité : On vérifie si le ticker n'a pas été ajouté entre temps
-        if ticker not in df_current['ticker'].values:
-            new_row = pd.DataFrame([[ticker, name]], columns=['ticker', 'name'])
-            df_updated = pd.concat([df_current, new_row], ignore_index=True)
-            
-            # On met à jour le Google Sheet
-            conn.update(worksheet="Tickers_Data", data=df_updated)
-            
-            # IMPORTANT : On vide le cache de lecture pour que la prochaine 
-            # exécution de load_tickers_names() voie la nouvelle ligne
-            st.cache_data.clear()
-    except Exception as e:
-        st.error(f"Erreur d'écriture GSheet : {e}")
-
-# --- CHARGEMENT DES NOMS des actions DEPUIS GOOGLE SHEETS ---
-@st.cache_data(ttl=3600)  # On rafraîchit toutes les heures seulement
-def load_tickers_names():
-    try:        
-        # On lit l'onglet où tu stockes les correspondances Ticker -> Nom
-        df_names = conn.read(worksheet="Tickers_Data") 
-        # On transforme ça en dictionnaire { 'AAPL': 'Apple Inc.', ... }
-        return pd.Series(df_names.name.values, index=df_names.ticker).to_dict()
-    except:
-        return {}
-
-# On charge le dictionnaire une fois
-TICKER_NAMES_MAP = load_tickers_names()
-
-
 # ---  FONCTIONS de rafraichissement de news ---
+@st.cache_data(ttl=86400) # Cache le nom 24h
 def get_action_name(ticker):
-    # 1. On vérifie dans le dictionnaire local (chargé du Sheet)
-    if ticker in TICKER_NAMES_MAP:
-        return TICKER_NAMES_MAP[ticker]
-    
-    # 2. Si PAS dans le Sheet, on fait l'appel Yahoo (une seule fois !)
     try:
-        t = yf.Ticker(ticker)
-        long_name = t.info.get('longName', ticker.upper())
-        
-        # 3. ON ENREGISTRE DANS LE SHEET POUR LE FUTUR
-        save_new_ticker_to_sheet(ticker, long_name)
-        
-        # On l'ajoute aussi au dictionnaire en mémoire pour cette session
-        TICKER_NAMES_MAP[ticker] = long_name
-        return long_name
+        return yf.Ticker(ticker).info.get('longName', ticker)
     except:
-        return ticker.upper()
+        return ticker
     
-@st.fragment(run_every="5m") # S'actualise seul toutes les 5 minutes
+@st.fragment(run_every="5m") # Les news s'actualisent toutes seules toutes les 5 minutes
 def news_dashboard_module(liste_tickers):
     # Barre d'outils discrète en haut du module
     
@@ -340,81 +251,183 @@ def news_dashboard_module(liste_tickers):
                 st.caption(f"Aucune actualité récente pour {t}.")    
 
 
-# --- Fonction New - Vue Flux ou Timeline- liste chronologique des news. Toutes la conf est dans le module ---
+# --- Boucle actualite --- Fonction actualite  Flux ou Timeline- liste chronologique des news. Toutes la conf est dans le module ---
 @st.fragment(run_every="5m")
 def actualite_module(liste_tickers):
-    # --- 1. BARRE D'OUTILS (Recherche à gauche, Traduction/Refresh à droite) ---
-    col_search, col_trad, col_ref = st.columns([0.6, 0.25, 0.15])
-    
+    # --- 1. BARRE D'OUTILS  ---
+    col_search, col_sent, col_trad, col_ref = st.columns([0.4, 0.2, 0.2, 0.2])
     with col_search:
-        # Champ de recherche discret
-        query = st.text_input("🔍 Rechercher...", placeholder="Action, mot-clé...", label_visibility="collapsed",key="main_search").lower().strip()
+        # Champ de recherche
+        query = st.text_input(
+            "🔍 Rechercher...",
+            placeholder="Action, mot-clé...",
+            label_visibility="collapsed",
+            key="news_search_input").lower().strip()
     
     with col_trad:
         # Toggle pour la traduction globale
-        st.session_state.mode_fr = st.toggle("🇫🇷", value=st.session_state.get('mode_fr', False), help="Traduction des titres en français")
-        #mode_global_fr = st.toggle("🇫🇷", key="mode_fr")
+        mode_global_fr = st.toggle("🇫🇷", help="Traduction des titres en français", 
+                                   value=st.session_state.get('mode_fr', True), 
+                                   key="mode_fr")
     
     with col_ref:
-        # Bouton refresh compact
-        if st.button("🔄", help="Actualiser le flux", key="refresh_news_final"):
+        # Bouton de rafraîchissement local au fragment
+        if st.button("🔄", help="Actualiser le flux", key="refresh_news_btn"):
             get_quick_news.clear()  # Efface le cache des news pour forcer la récupération de nouvelles données
             st.rerun(scope="fragment")
-    
-    # --- 2. COLLECTE ET DÉDUPLICATION ---
-    all_news = []
-    for t in liste_tickers:
-        articles = get_quick_news(t)
-        # On récupère le nom propre depuis notre dictionnaire
-        nom_propre = ticker_to_name.get(t, t)
-        for a in articles:
-            a['ticker_parent'] = t
-            a['nom_parent'] = nom_propre
-            all_news.append(a)
+    if 'nb_news_display' not in st.session_state:
+        st.session_state.nb_news_display = 40 # Nombre de news à afficher par défaut
 
-    # Tri chronologique (plus récent en haut)
-    all_news.sort(key=lambda x: x.get('dt_obj', 0), reverse=True)
+    with col_sent:
+        filtre_sent = st.selectbox(
+            "Filtrer par sentiment",
+            options=["Tous", "Positifs 🟢", "Négatifs 🔴"],
+            label_visibility="collapsed",            
+        )
 
+    # --- 2. COLLECTE GROUPÉE (LA MAGIE OPÈRE ICI) ---
+    with st.spinner("Récupération des actualités..."):
+        # Un seul appel pour tous les tickers !
+        all_news = get_bundle_news(liste_tickers, ticker_to_name)
+
+    # Tri chronologique global (une seule fois pour tout le monde)
+    all_news.sort(key=lambda x: x.get('dt_obj', datetime.now()), reverse=True)
+
+    # --- 3. DÉDUPLICATION ET FILTRAGE ---
     unique_news = []
     titres_vus = set()
-    for n in all_news:
-        # Déduplication sur le titre brut pour éviter les répétitions multi-tickers
-        fingerprint = n['titre'].lower().strip()
-        if fingerprint not in titres_vus:
-            # Filtre de recherche dynamique
-            if not query or (query in fingerprint or query in n['ticker_parent'].lower()):
-                unique_news.append(n)
-                titres_vus.add(fingerprint)
-
-    # --- 3. AFFICHAGE "ONE-LINE" (Format Newsroom) ---
-    st.markdown("---")
     
+    for n in all_news:        
+        fingerprint = n['titre'].lower().strip()
+        # 1. On récupère le sentiment et on prépare le filtre
+        sent_label = n.get('sentiment', 'Neutre')
+        match_sent = True
+        
+        # 2. On vérifie si la news doit être exclue selon le choix de l'utilisateur
+        if "Positifs" in filtre_sent and sent_label != "Positif":
+            match_sent = False
+        elif "Négatifs" in filtre_sent and sent_label != "Négatif":
+            match_sent = False
+
+        # 3. ON N'ENTRE ICI QUE SI LE SENTIMENT EST OK
+        if match_sent: 
+            if fingerprint not in titres_vus:
+                # Préparation des variables pour la recherche
+                source_brut = n.get('source', '').lower()
+                nom_brut = n.get('nom_propre', '').lower()
+                
+                # 4. Filtre de recherche par mot-clé (query)
+                if not query or (query in fingerprint or 
+                                query in n.get('ticker_parent', '').lower() or 
+                                query in source_brut or 
+                                query in nom_brut):
+                    
+                    # 5. AJOUT FINAL (Indentation maximum ici)
+                    unique_news.append(n)
+                    titres_vus.add(fingerprint)
+
+    # --- 4. AFFICHAGE FINAL ---
+    st.markdown("---")
     if unique_news:
-        for n in unique_news[:40]: # On affiche les 40 news les plus récentes
-            titre_brut = n['titre']
-            lien = n['lien']
-            # Nettoyage de la source : (Yahoo) au lieu de ((Yahoo))
-            source = n.get('source', 'Analyse').strip().strip('()')
-            ticker = n['ticker_parent']
-            nom_action = n['nom_parent']
+        # --- OPTIMISATION : Traduction groupée avant la boucle ---
+        news_to_display = unique_news[:st.session_state.nb_news_display]
 
-            # Traduction à la volée si le bouton est activé
-            if st.session_state.get('mode_fr', False):
-                # On ne traduit que si des mots anglais clés sont détectés
-                mots_en = {'the', 'stock', 'fed', 'earnings', 'growth', 'buy', 'market', 'ai'}
-                if any(w in titre_brut.lower() for w in mots_en):
-                    titre_affiche = safe_translate(titre_brut)
-                else:
-                    titre_affiche = titre_brut
-            else:
-                titre_affiche = titre_brut
+        if st.session_state.get('mode_fr', False):
+            with st.spinner("Traduction des titres..."):
+                titres_originaux = [n['titre'] for n in news_to_display]
+                titres_traduits = translate_batch(titres_originaux)
+                
+                # On injecte les traductions dans nos objets news
+                for i, n in enumerate(news_to_display):
+                    if i < len(titres_traduits):
+                        n['titre_affiche'] = titres_traduits[i]
+        else:
+            # Mode anglais : le titre affiché est le titre original
+            for n in news_to_display:
+                n['titre_affiche'] = n['titre']
 
-            # FORMAT FINAL : Badge | Date | TICKER : [Titre](Lien) (Source)
-            st.markdown(f"{n['badge']} | {n['date']} | **{nom_action}** : [{titre_affiche}]({lien}) *({source})*")
+        # --- BOUCLE D'AFFICHAGE (Maintenant ultra rapide) ---
+        for n in news_to_display:
+            titre_final = n.get('titre_affiche', n['titre'])
+            
+            source = n.get('source', 'Info')
+            nom_action = n.get('nom_propre', n.get('ticker_parent', 'Action'))
+            
+            # Ligne finale élégante
+            st.markdown(
+                f"{n['badge']} | {n['date']} | **{nom_action}** : "
+                f"[{titre_final}]({n['lien']}) *({source})*"
+        )
+        
     else:
-        st.info("Aucune actualité ne correspond à votre recherche.")
+        st.info("Aucune actualité trouvée.")
+    # --- 5. BOUTON AFFICHER PLUS (SI PLUS DE NEWS DISPONIBLES) ---
+    if len(unique_news) > st.session_state.nb_news_display:
+            st.write("---") # Une petite ligne de séparation
+            
+            # On crée 3 colonnes pour centrer le bouton
+            c1, c2, c3 = st.columns([1, 2, 1])
+            with c2:
+                if st.button(f"Afficher plus de news (+40) ➕", use_container_width=True):
+                    st.session_state.nb_news_display += 40
+                    st.rerun()    
 
+# --- FONCTION DE CHARGEMENT DES WATCHLISTS DEPUIS GOOGLE SHEETS ---
+@st.cache_data(ttl=3600) # On garde la liste en mémoire 1 heure pour éviter les appels redondants à Google Sheets
+def load_all_watchlists():
+    try:
+        conn = st.connection("gsheets", type=GSheetsConnection)
+        df = conn.read(worksheet="Watchlists")
+        return df
+    except Exception:
+        return None
+    
+@st.cache_data(ttl=600) # Cache de 10 minutes pour la sélection
+def get_tickers_from_watchlist(watchlist_name):
+    df = load_all_watchlists()
+    if df is not None:
+        row = df[df['list_name'] == watchlist_name]
+        if not row.empty:
+            return row.iloc[0]['tickers']
+    return ""
+    
+@st.cache_data(ttl=900)
+def get_bundle_news(liste_tickers, ticker_to_name):
+    all_news_combined = []
+    
+    # On lance la récupération pour tous les tickers en même temps
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        # On utilise une compréhension de liste pour lancer get_quick_news
+        future_to_ticker = {executor.submit(get_quick_news, t): t for t in liste_tickers}
+        
+        for future in future_to_ticker:
+            ticker_parent = future_to_ticker[future]
+            try:
+                articles = future.result(timeout=10)
+                if articles:
+                    for a in articles:
+                        a['ticker_parent'] = ticker_parent
+                        a['nom_propre'] = ticker_to_name.get(ticker_parent, ticker_parent)
+                        all_news_combined.append(a)
+            except Exception:
+                continue
+                
+    return all_news_combined
 
+@st.cache_data(ttl=3600)
+def get_column_config():
+    # On utilise la connexion définie globalement
+    return conn.read(worksheet="Choix_colonnes")
+    
+# --- FONCTION DE SAUVEGARDE DES WATCHLISTS VERS GOOGLE SHEETS ---    
+def update_tickers_callback():
+    # On récupère le texte saisi dans le text_area via sa clé
+    new_val = st.session_state["ticker_editor"].upper()
+    # On sauvegarde dans GSheets
+    save_watchlist_gsheets(sel_list, new_val)
+    # On vide le cache pour que le tableau se mette à jour avec les nouveaux cours
+    st.cache_data.clear()
+# --- 1. CONFIGURATION & DOSSIERS ---
 
 # --- 2. RÉFÉRENTIELS ---
 SECTORS_FR = {
@@ -455,6 +468,7 @@ def search_ticker(query):
         return results
     except: return []
 
+# Fonction de formatage des nombres pour les rendre plus lisibles (ex: 1500000 -> 1.5 M)
 def clean_num(n):
     if isinstance(n, str): return n
     if n is None or pd.isna(n): return "0"
@@ -573,6 +587,7 @@ def fetch_stock_data(ticker_str):
     except: return None
 
 # --- 4. GESTION LISTES & COLONNES ---
+@st.cache_data(ttl=3600)
 def get_all_watchlists():
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
@@ -819,64 +834,68 @@ st.title(f"📈 {sel_list}")
 t_list = [t.strip().upper() for t in tickers_input.replace('\r', '').replace('\n', ',').split(',') if t.strip()]
 
 
+@st.cache_data(ttl=3600)
+def get_column_config():
+    # Cette fonction ne sera exécutée réellement qu'une fois par heure
+    return conn.read(worksheet="Choix_colonnes")
+# Bloc principal : boucle qui recupere les infos de tous les tickers et affiche le tableau
 if t_list:
-    data_res = []
-    # Création d'une barre de progression pour patienter
-    progress_bar = st.progress(0)
-    for i, t in enumerate(t_list):
-        try: 
-            # 1. On tente de récupérer les données pour ce ticker
-            res = fetch_stock_data(t)
+    status_container = st.empty()
+    # Création d'une barre de progression
+    with status_container.container():
+        with st.status(f"⏳ Analyse de {len(t_list)} actions en cours...", expanded=True) as status:
+            st.write("Connexion aux serveurs financiers...")
+            
+            # Exécution en parallèle
+            with ThreadPoolExecutor(max_workers=20) as executor:
+                results = list(executor.map(fetch_stock_data, t_list))
+            
+            st.write("Finalisation des calculs...")
+            
+            # On change l'apparence une fois fini
+            status.update(label="✅ Données prêtes !", state="complete", expanded=False)
+            # Petit délai optionnel de 0.5s pour que l'utilisateur 
+            # voit le message "Terminé" avant que ça disparaisse            
+            time.sleep(0.5)
 
-            # 2. Si ça a marché, on l'ajoute à la liste
-            if res:
-                data_res.append(res)
+    # ON EFFACE TOUT le conteneur de statut
+    status_container.empty()
+
+    # On traite les résultats et on affiche le tableau (qui prendra la place vide)
+    data_res = [r for r in results if r is not None]
+    
+    if data_res:
+        # Affiche ici le tableau final (st.dataframe ou st.table)
+        df = pd.DataFrame(data_res)
+
+        #Convertir la colonne 'Date Détachement' en format date (ajuste le nom exact de la colonne)
+        # dayfirst=True est important si tes dates sont au format JJ/MM/AAAA
+        df['Date Détachement'] = pd.to_datetime(df['Date Détachement'], errors='coerce', dayfirst=True)    
+        ticker_to_name = dict(zip(df['Ticker'], df['Nom']))
+        # --- GESTION DES COLONNES VIA GOOGLE SHEETS ---
+        try:
+            # 1. Lecture de l'onglet de configuration
+            df_conf = get_column_config()
+            
+            # 2. Sélecteur de Profil dans la barre latérale
+            liste_profils = sorted(df_conf['Profil'].unique().tolist())
+            profil_choisi = st.sidebar.selectbox("📋 Vue de tableau", options=liste_profils)
+
+            # 3. On filtre les réglages pour ce profil précis
+            config_active = df_conf[df_conf['Profil'] == profil_choisi]            
+            cols_base = config_active[config_active['Afficher'] == True]['Nom_Colonne'].tolist()
+            cols_figees_base = config_active[config_active['Figer'] == True]['Nom_Colonne'].tolist()
+
         except Exception as e:
-            st.sidebar.warning(f"⚠️ Impossible de charger {t}. (Erreur : {e})")
-            continue
-        # Mise à jour de la barre de progression
-        progress_bar.progress((i + 1) / len(t_list))
-    ## On enlève la barre une fois fini
-    progress_bar.empty()
+            st.error(f"Erreur configuration colonnes : {e}")
+            cols_base, cols_figees_base = ["Ticker", "Nom"], ["Ticker"]
 
-    #  1. Message d'avertissement si aucune donnée n'est récupérée (ex: problème Yahoo ou tickers invalides)
-    if not data_res:
-        st.warning("⚠️ Trop de requettes envoyées ou les tickers sont invalides. Réessayez dans quelques minutes.")
-        st.stop() # Cette ligne magique arrête le code ici SI data_res est vide
-        # ------------------------
-    # 2. On construit le DataFrame à partir de la liste de résultats
-    df = pd.DataFrame(data_res)
-
-    #Convertir la colonne 'Date Détachement' en format date (ajuste le nom exact de la colonne)
-    # dayfirst=True est important si tes dates sont au format JJ/MM/AAAA
-    df['Date Détachement'] = pd.to_datetime(df['Date Détachement'], errors='coerce', dayfirst=True)    
-    ticker_to_name = dict(zip(df['Ticker'], df['Nom']))
-    # --- GESTION DES COLONNES VIA GOOGLE SHEETS ---
-    try:
-        # 1. Lecture de l'onglet de configuration
-        df_conf = conn.read(worksheet="Choix_colonnes")
-        
-        # 2. Sélecteur de Profil dans la barre latérale
-        liste_profils = sorted(df_conf['Profil'].unique().tolist())
-        profil_choisi = st.sidebar.selectbox("📋 Vue de tableau", options=liste_profils)
-
-        # 3. On filtre les réglages pour ce profil précis
-        config_active = df_conf[df_conf['Profil'] == profil_choisi]
-        
-        # On récupère les colonnes "cochées" dans le Sheet
-        cols_base = config_active[config_active['Afficher'] == True]['Nom_Colonne'].tolist()
-        cols_figees_base = config_active[config_active['Figer'] == True]['Nom_Colonne'].tolist()
-
-    except Exception as e:
-        st.error(f"Erreur configuration colonnes : {e}")
-        cols_base, cols_figees_base = ["Ticker", "Nom"], ["Ticker"]
-
-   
-    # --- 5. AFFICHAGE FINAL ---
-    # On prépare la configuration "pinned" pour Streamlit
-    selection_finale = []
-    selection_figee = []
-    config_colonnes = {col: st.column_config.Column(pinned=True) for col in selection_figee}
+    
+        # --- 5. AFFICHAGE FINAL ---
+        # On prépare la configuration "pinned" pour Streamlit
+        selection_finale = []
+        selection_figee = []
+        config_colonnes = {col: st.column_config.Column(pinned=True) for col in selection_figee}
 
     
     def style_df(df):
