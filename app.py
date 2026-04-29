@@ -102,6 +102,11 @@ def get_quick_news(ticker):
                     clean_title = parts[0]
                     source_name = parts[1] if len(parts) > 1 else default_source
                     
+                    # FILTRE ANTI-BRUIT
+                    # On vérifie si le ticker (ex: OR) ou le nom de l'action est dans le titre
+                    if t_clean.upper() not in clean_title.upper():
+                        continue # Ignore les news qui ne mentionnent pas explicitement le sujet
+
                     # --- ANALYSE SENTIMENT  ---
                     pol = TextBlob(clean_title).sentiment.polarity
                     sentiment_label = "Positif" if pol > 0.1 else "Négatif" if pol < -0.1 else "Neutre"
