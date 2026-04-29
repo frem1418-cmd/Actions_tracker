@@ -101,11 +101,14 @@ def get_quick_news(ticker):
                     parts = e.title.rsplit(' - ', 1)
                     clean_title = parts[0]
                     source_name = parts[1] if len(parts) > 1 else default_source
+                    title_upper = clean_title.upper()
                     
                     # FILTRE ANTI-BRUIT
+                    # On définit les mots interdits pour éviter la confusion L'OREAL / OR
+                    forbidden_keywords = [" OR ", " GOLD ", " ONCE "] # Espaces importants pour ne pas bloquer "ORDRE"
                     # On vérifie si le ticker (ex: OR) ou le nom de l'action est dans le titre
-                    if t_clean.upper() not in clean_title.upper():
-                        continue # Ignore les news qui ne mentionnent pas explicitement le sujet
+                    if t_clean not in title_upper or any(word in title_upper for word in forbidden_keywords):
+                        continue # On passe à la news suivante sans l'ajouter à news_list
 
                     # --- ANALYSE SENTIMENT  ---
                     pol = TextBlob(clean_title).sentiment.polarity
