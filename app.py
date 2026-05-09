@@ -805,7 +805,12 @@ with st.sidebar:
 
     with col_news1:
     # On laisse le label vide pour ne pas prendre de place
-        show_news_portfolio = st.checkbox("", value=False, key="chk_news_port")
+        show_news_portfolio = st.checkbox(
+            "Actualités", 
+            value=False, 
+            key="chk_news_port",
+            label_visibility="collapsed"
+        )
 
     with col_news2:
     # On colle l'icône et le texte ici
@@ -932,7 +937,7 @@ if t_list:
             for col in ['Chg 1J', 'Chg 1M', 'Chg YTD']:
                 if col in df.columns:
                     # On cherche le signe + ou - dans le texte (car ce sont des strings avec emojis)
-                    mask_plus = df[col].astype(str).str.contains('\+')
+                    mask_plus = df[col].astype(str).str.contains(r'\+')
                     mask_moins = df[col].astype(str).str.contains('-')
                     
                     # On applique les couleurs (Vert pour +, Rouge pour -)
