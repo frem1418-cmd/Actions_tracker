@@ -368,7 +368,7 @@ def actualite_module(liste_tickers):
             # On crée 3 colonnes pour centrer le bouton
             c1, c2, c3 = st.columns([1, 2, 1])
             with c2:
-                if st.button(f"Afficher plus de news (+40) ➕", use_container_width=True):
+                if st.button(f"Afficher plus de news (+40) ➕", width="stretch"):
                     st.session_state.nb_news_display += 40
                     st.rerun()    
 
@@ -698,7 +698,7 @@ st.markdown(
 )
 
 with st.sidebar:
-    if st.button("🔄 Forcer l'actualisation", use_container_width=True):
+    if st.button("🔄 Forcer l'actualisation", width="stretch"):
         st.cache_data.clear()
         st.rerun()
 
@@ -752,7 +752,7 @@ with st.sidebar:
     if show_add:
         st.info("Créer une nouvelle liste")
         new_name = st.text_input("Nom de la liste :", placeholder="Ex: Dividendes")
-        if st.button("Confirmer Création", use_container_width=True):
+        if st.button("Confirmer Création", width="stretch"):
             if new_name:
                 save_watchlist_gsheets(new_name, "AAPL")
                 st.success(f"'{new_name}' Liste créée !")
@@ -981,7 +981,7 @@ if t_list:
                 df[selection_finale].style.apply(style_df, axis=None).format(formatter=lambda x: clean_num(x) if isinstance(x, (int, float)) else x),
                 on_select="rerun",
                 selection_mode="single-row",
-                use_container_width=True,
+                width="stretch",
                 hide_index=True,
                 height=min(hauteur_dynamique, 850),
                 column_config={
@@ -1077,7 +1077,7 @@ if t_list:
                             fig.update_yaxes(title_text="Prix", secondary_y=False, showgrid=True, gridcolor='lightgray', fixedrange=False)
                             fig.update_yaxes(title_text="Volume", secondary_y=True, showgrid=False, fixedrange=False)
 
-                            st.plotly_chart(fig, use_container_width=True,
+                            st.plotly_chart(fig, width="stretch",
                                             config={
                                                 'scrollZoom': True,        # Active la roulette
                                                 'displayModeBar': True, 
@@ -1196,18 +1196,18 @@ if t_list:
                             
                             if is_seeking or not est_anglais:
                                 # Article déjà en français
-                                st.link_button("📖 Lire l'article complet", lien_reel, use_container_width=True)
+                                st.link_button("📖 Lire l'article complet", lien_reel, width="stretch")
                             else:
                                 # Article Anglais : Double bouton comme tu aimais
                                 c1, c2 = st.columns(2)
                                 with c1:
-                                    st.link_button("📄 Original (EN)", lien_reel, use_container_width=True)
+                                    st.link_button("📄 Original (EN)", lien_reel, width="stretch")
                                 with c2:
                                     # On affiche le bouton Google Translate pour toutes les autres sources
                                     lien_propre = urllib.parse.quote(lien_reel, safe='')
                                     url_t = f"https://translate.google.com/translate?sl=auto&tl=fr&u={lien_propre}"
                                     #url_t = f"https://translate.google.com/translate?sl=auto&tl=fr&u={lien_reel}"
-                                    st.link_button("🇫🇷 Traduire Page", url_t, type="primary", use_container_width=True)
+                                    st.link_button("🇫🇷 Traduire Page", url_t, type="primary", width="stretch")
                             
                             if mode_fr and est_anglais:
                                 st.caption(f"Original : {titre_brut}")
