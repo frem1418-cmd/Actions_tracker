@@ -15,6 +15,8 @@ from streamlit_gsheets import GSheetsConnection
 from deep_translator import GoogleTranslator
 from concurrent.futures import ThreadPoolExecutor
 import urllib.parse
+import logging
+logging.getLogger("streamlit").setLevel(logging.ERROR)
 
 # Initialisation de la connexion (à faire une seule fois)
 conn = st.connection("gsheets", type=GSheetsConnection)
