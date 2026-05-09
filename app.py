@@ -221,18 +221,8 @@ def get_quick_news(ticker):
 # ---  FONCTIONS de rafraichissement de news ---
 @st.cache_data(ttl=86400) # Cache le nom 24h
 def get_action_name(ticker):
-    # Dictionnaire de secours pour éviter d'appeler Yahoo
-    noms_communs = {"AAPL": "Apple Inc.", "MSFT": "Microsoft", "TSLA": "Tesla", "NVDA": "NVIDIA"}
-    
-    t_upper = ticker.upper().split('.')[0]
-    if t_upper in noms_communs:
-        return noms_communs[t_upper]
-        
     try:
-        # On tente Yahoo, mais avec un timeout très court
-        dat = yf.Ticker(ticker)
-        # .fast_info est souvent moins bloqué que .info
-        return dat.fast_info.get('longName', ticker) 
+        return yf.Ticker(ticker).info.get('longName', ticker)
     except:
         return ticker
     
