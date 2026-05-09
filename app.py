@@ -898,310 +898,310 @@ if t_list:
         config_colonnes = {col: st.column_config.Column(pinned=True) for col in selection_figee}
 
     
-    def style_df(df):
-        styles = pd.DataFrame('', index=df.index, columns=df.columns)
-        
-        # --- COLORATION DES CASES ---
-        if 'Prix Actuel' in df.columns:
-            p_actuel = df['Prix Actuel']
+        def style_df(df):
+            styles = pd.DataFrame('', index=df.index, columns=df.columns)
             
-            # Entrées individuelles (Vert si > Prix)
-            for col in [ 'Entrée FCF -15%', 'Entrée BNA -15%','Entrée Analystes -15%']:
+            # --- COLORATION DES CASES ---
+            if 'Prix Actuel' in df.columns:
+                p_actuel = df['Prix Actuel']
+                
+                # Entrées individuelles (Vert si > Prix)
+                for col in [ 'Entrée FCF -15%', 'Entrée BNA -15%','Entrée Analystes -15%']:
+                    if col in df.columns:
+                        mask = df[col].fillna(0) > p_actuel
+                        styles.loc[mask, col] = 'background-color: #d4edda; color: #155724;'
+
+                # Entrée Synthèse (Vert si > Prix + Mise en avant)
+                if 'Entrée Synthèse (-15%)' in df.columns:
+                    mask_synth = df['Entrée Synthèse (-15%)'] > p_actuel
+                    # Style de base pour la colonne (Bordure et gras)
+                    styles['Entrée Synthèse (-15%)'] = 'border-left: 2px solid #555; border-right: 2px solid #555; font-weight: bold;'
+                    # Coloration si signal achat
+                    styles.loc[mask_synth, 'Entrée Synthèse (-15%)'] += 'background-color: #28a745; color: white;'
+
+            # --- COLORATION PIOTROSKI ---
+            if 'Santé (Piotroski)' in df.columns:
+                for i, v in df['Santé (Piotroski)'].items():
+                    try:
+                        s = int(str(v).split('/')[0])
+                        if s >= 4: styles.loc[i, 'Santé (Piotroski)'] += 'color: #28a745; font-weight: bold;'
+                        elif s <= 1: styles.loc[i, 'Santé (Piotroski)'] += 'color: #dc3545; font-weight: bold;'
+                    except: pass
+            # --- COLORATION DES PERFORMANCES ---
+            for col in ['Chg 1J', 'Chg 1M', 'Chg YTD']:
                 if col in df.columns:
-                    mask = df[col].fillna(0) > p_actuel
-                    styles.loc[mask, col] = 'background-color: #d4edda; color: #155724;'
+                    # On cherche le signe + ou - dans le texte (car ce sont des strings avec emojis)
+                    mask_plus = df[col].astype(str).str.contains('\+')
+                    mask_moins = df[col].astype(str).str.contains('-')
+                    
+                    # On applique les couleurs (Vert pour +, Rouge pour -)
+                    styles.loc[mask_plus, col] += 'color: #28a745; font-weight: bold;'
+                    styles.loc[mask_moins, col] += 'color: #dc3545; font-weight: bold;'
+            return styles
+        if show_news_portfolio:
+            # 1. Titre de la section
+            st.subheader(f"📝 Revue de Presse : {sel_list}")
 
-            # Entrée Synthèse (Vert si > Prix + Mise en avant)
-            if 'Entrée Synthèse (-15%)' in df.columns:
-                mask_synth = df['Entrée Synthèse (-15%)'] > p_actuel
-                # Style de base pour la colonne (Bordure et gras)
-                styles['Entrée Synthèse (-15%)'] = 'border-left: 2px solid #555; border-right: 2px solid #555; font-weight: bold;'
-                # Coloration si signal achat
-                styles.loc[mask_synth, 'Entrée Synthèse (-15%)'] += 'background-color: #28a745; color: white;'
-
-        # --- COLORATION PIOTROSKI ---
-        if 'Santé (Piotroski)' in df.columns:
-            for i, v in df['Santé (Piotroski)'].items():
-                try:
-                    s = int(str(v).split('/')[0])
-                    if s >= 4: styles.loc[i, 'Santé (Piotroski)'] += 'color: #28a745; font-weight: bold;'
-                    elif s <= 1: styles.loc[i, 'Santé (Piotroski)'] += 'color: #dc3545; font-weight: bold;'
-                except: pass
-        # --- COLORATION DES PERFORMANCES ---
-        for col in ['Chg 1J', 'Chg 1M', 'Chg YTD']:
-            if col in df.columns:
-                # On cherche le signe + ou - dans le texte (car ce sont des strings avec emojis)
-                mask_plus = df[col].astype(str).str.contains('\+')
-                mask_moins = df[col].astype(str).str.contains('-')
+            if tickers_input:
+                # On prépare la liste à partir de l'input
+                liste_tickers = [t.strip().upper() for t in tickers_input.split(',') if t.strip()]
                 
-                # On applique les couleurs (Vert pour +, Rouge pour -)
-                styles.loc[mask_plus, col] += 'color: #28a745; font-weight: bold;'
-                styles.loc[mask_moins, col] += 'color: #dc3545; font-weight: bold;'
-        return styles
-    if show_news_portfolio:
-        # 1. Titre de la section
-        st.subheader(f"📝 Revue de Presse : {sel_list}")
-
-        if tickers_input:
-            # On prépare la liste à partir de l'input
-            liste_tickers = [t.strip().upper() for t in tickers_input.split(',') if t.strip()]
-            
-            # ON APPELLE DIRECTEMENT LE FLUX CHRONOLOGIQUE (Plus besoin de radio bouton)
-            actualite_module(liste_tickers)
+                # ON APPELLE DIRECTEMENT LE FLUX CHRONOLOGIQUE (Plus besoin de radio bouton)
+                actualite_module(liste_tickers)
+            else:
+                st.info("La liste de tickers est vide.")
         else:
-            st.info("La liste de tickers est vide.")
-    else:
-         # --- 4. ENRICHISSEMENT ET MODIFICATION DYNAMIQUE ---
-        with st.expander("🛠️ Personnaliser les colonnes affichées"):
-            # On permet d'ajouter n'importe quelle colonne du DF principal
-            toutes_les_cols = df.columns.tolist()
-            
-            selection_finale = st.multiselect(
-                "Colonnes actives :",
-                options=toutes_les_cols,
-                default=[c for c in cols_base if c in toutes_les_cols]
+            # --- 4. ENRICHISSEMENT ET MODIFICATION DYNAMIQUE ---
+            with st.expander("🛠️ Personnaliser les colonnes affichées"):
+                # On permet d'ajouter n'importe quelle colonne du DF principal
+                toutes_les_cols = df.columns.tolist()
+                
+                selection_finale = st.multiselect(
+                    "Colonnes actives :",
+                    options=toutes_les_cols,
+                    default=[c for c in cols_base if c in toutes_les_cols]
+                )
+                
+                # On permet de modifier quelles colonnes sont figées
+                selection_figee = st.multiselect(
+                    "Colonnes à figer à gauche :",
+                    options=selection_finale,
+                    default=[c for c in cols_figees_base if c in selection_finale]
+                )
+
+            # Calcul dynamique : 35 pixels par ligne + 38 pixels pour l'en-tête
+            hauteur_dynamique = (len(df) * 35) + 38
+            sel = st.dataframe(
+                df[selection_finale].style.apply(style_df, axis=None).format(formatter=lambda x: clean_num(x) if isinstance(x, (int, float)) else x),
+                on_select="rerun",
+                selection_mode="single-row",
+                use_container_width=True,
+                hide_index=True,
+                height=min(hauteur_dynamique, 850),
+                column_config={
+                    "Date Détachement": st.column_config.DateColumn(
+                        "Date Détachement",
+                        format="DD/MM/YYYY",  # Force l'affichage au format français
+                    ),
+                    **config_colonnes 
+                },
             )
-            
-            # On permet de modifier quelles colonnes sont figées
-            selection_figee = st.multiselect(
-                "Colonnes à figer à gauche :",
-                options=selection_finale,
-                default=[c for c in cols_figees_base if c in selection_finale]
-            )
-
-        # Calcul dynamique : 35 pixels par ligne + 38 pixels pour l'en-tête
-        hauteur_dynamique = (len(df) * 35) + 38
-        sel = st.dataframe(
-            df[selection_finale].style.apply(style_df, axis=None).format(formatter=lambda x: clean_num(x) if isinstance(x, (int, float)) else x),
-            on_select="rerun",
-            selection_mode="single-row",
-            use_container_width=True,
-            hide_index=True,
-            height=min(hauteur_dynamique, 850),
-            column_config={
-                "Date Détachement": st.column_config.DateColumn(
-                    "Date Détachement",
-                    format="DD/MM/YYYY",  # Force l'affichage au format français
-                ),
-                **config_colonnes 
-            },
-        )
-        if sel.selection and sel.selection.rows:
-            d = data_res[sel.selection.rows[0]]
-            fd = d['full_data']
-            st.divider()
-            
-            c1, c2 = st.columns([2, 1])
-            with c1:
-                st.header(f"🏢 {d['Nom']} ({d['Ticker']})")
-                st.subheader("🏥 Diagnostic Santé Financière")
-                grid = st.columns(5)
-                for i, (label, info) in enumerate(d['p_details'].items()):
-                    with grid[i]:
-                        txt_c = info.get('comparaison', '')
-                        col_v = "#28a745" if "+" in txt_c else ("#dc3545" if "-" in txt_c else "#555")
-                        st.markdown(f"""
-                        <div title="{EXPLICATIONS.get(label, '')}" style='background:#f8f9fa; padding:10px; border-radius:10px; text-align:center; border:1px solid #ddd; height:180px; cursor:help; display:flex; flex-direction:column; justify-content:center;'>
-                            <div style='font-weight:bold; color:#555; font-size:0.8em; margin-bottom:5px;'>{label} ℹ️</div>
-                            <div style='font-size:1em; font-weight:bold;'>{info.get('detail', 'N/A')}</div>
-                            <div style='font-size:0.75em; color:{col_v}; font-weight:bold; background:white; padding:3px; border-radius:4px; border:1px solid #eee; margin: 5px 0;'>{txt_c}</div>
-                            <div style='font-size:1.4em;'>{'✅' if info.get('status') else '❌'}</div>
-                        </div>
-                        """, unsafe_allow_html=True)
-                # --- SECTION GRAPHIQUE ---
-                # --- SECTION GRAPHIQUE AVANCÉ (PRIX + VOLUME) ---
+            if sel.selection and sel.selection.rows:
+                d = data_res[sel.selection.rows[0]]
+                fd = d['full_data']
                 st.divider()
-                st.subheader(f"📈 Performance & Volumes (YTD)")
                 
-                try:
+                c1, c2 = st.columns([2, 1])
+                with c1:
+                    st.header(f"🏢 {d['Nom']} ({d['Ticker']})")
+                    st.subheader("🏥 Diagnostic Santé Financière")
+                    grid = st.columns(5)
+                    for i, (label, info) in enumerate(d['p_details'].items()):
+                        with grid[i]:
+                            txt_c = info.get('comparaison', '')
+                            col_v = "#28a745" if "+" in txt_c else ("#dc3545" if "-" in txt_c else "#555")
+                            st.markdown(f"""
+                            <div title="{EXPLICATIONS.get(label, '')}" style='background:#f8f9fa; padding:10px; border-radius:10px; text-align:center; border:1px solid #ddd; height:180px; cursor:help; display:flex; flex-direction:column; justify-content:center;'>
+                                <div style='font-weight:bold; color:#555; font-size:0.8em; margin-bottom:5px;'>{label} ℹ️</div>
+                                <div style='font-size:1em; font-weight:bold;'>{info.get('detail', 'N/A')}</div>
+                                <div style='font-size:0.75em; color:{col_v}; font-weight:bold; background:white; padding:3px; border-radius:4px; border:1px solid #eee; margin: 5px 0;'>{txt_c}</div>
+                                <div style='font-size:1.4em;'>{'✅' if info.get('status') else '❌'}</div>
+                            </div>
+                            """, unsafe_allow_html=True)
+                    # --- SECTION GRAPHIQUE ---
+                    # --- SECTION GRAPHIQUE AVANCÉ (PRIX + VOLUME) ---
+                    st.divider()
+                    st.subheader(f"📈 Performance & Volumes (YTD)")
                     
-                    
-                    s_obj = yf.Ticker(d['Ticker'])
-                    current_yr = datetime.now().year
-                    
-                    # Récupération historique pour calcul MA50
-                    from datetime import timedelta
-                    date_debut_calcul = (datetime(current_yr, 1, 1) - timedelta(days=100)).strftime('%Y-%m-%d')
-                    h_data_large = s_obj.history(start=date_debut_calcul)
-
-                    if not h_data_large.empty:
-                        h_data_large['MA50'] = h_data_large['Close'].rolling(window=50).mean()
-                        h_data = h_data_large[h_data_large.index >= f"{current_yr}-01-01"]
-
-                        # --- 1. CALCUL COULEUR VOLUME (Vert si hausse, Rouge si baisse) ---
-                        colors = ['#28a745' if row['Close'] >= row['Open'] else '#dc3545' 
-                                for _, row in h_data.iterrows()]
-
-                        fig = make_subplots(specs=[[{"secondary_y": True}]])
-
-                        # Courbe du prix
-                        fig.add_trace(go.Scatter(x=h_data.index, y=h_data['Close'], name="Prix", line=dict(color='#28a745', width=2)), secondary_y=False)
+                    try:
                         
-                        # MA50
-                        fig.add_trace(go.Scatter(x=h_data.index, y=h_data['MA50'], name="MA50", line=dict(color='orange', dash='dot')), secondary_y=False)
-
-                        # Volumes colorés
-                        fig.add_trace(go.Bar(x=h_data.index, y=h_data['Volume'], name="Volume", marker_color=colors, opacity=0.3), secondary_y=True)
-
-                        # --- 2. TRACÉ DES LIGNES HORIZONTALES ---
-                        prix_actuel = d['Prix Actuel']
-                        # Ligne Prix Actuel
-                        fig.add_hline(y=prix_actuel, line_dash="dash", line_color="gray", 
-                                    annotation_text=f"Actuel: {prix_actuel}", annotation_position="bottom right")
                         
-                        # Ligne Zone d'Achat (-15%)
-                        prix_achat = prix_actuel * 0.85
-                        fig.add_hline(y=prix_achat, line_dash="dot", line_color="#28a745", 
-                                    annotation_text="Zone d'achat (-15%)", annotation_position="top left")
-
-                        # Mise en forme
-                        # On récupère le nom et le ticker pour le titre
-                        nom_action = d.get('Nom', 'Action')
-                        ticker_action = d.get('Ticker', '')
-                        fig.update_layout(
-                            title={
-                                'text': f" {nom_action} ({ticker_action})",
-                                'y': 0.95,
-                                'x': 0.5,
-                                'xanchor': 'center',
-                                'yanchor': 'top',
-                                'font': {'size': 20}
-                            },
-                            height=450, margin=dict(l=0, r=0, t=30, b=0), hovermode="x unified", template="plotly_white")
-                        fig.update_yaxes(title_text="Prix", secondary_y=False, showgrid=True, gridcolor='lightgray', fixedrange=False)
-                        fig.update_yaxes(title_text="Volume", secondary_y=True, showgrid=False, fixedrange=False)
-
-                        st.plotly_chart(fig, use_container_width=True,
-                                        config={
-                                            'scrollZoom': True,        # Active la roulette
-                                            'displayModeBar': True, 
-                                            'editable': True,  # Affiche la barre d'outils en haut à droite
-                                            'modeBarButtonsToAdd': [
-                                                'drawline',     # Tracer des lignes droites
-                                                'drawrect',     # Tracer des zones (rectangles)
-                                                'eraseshape'    # Gomme pour effacer tes tracés
-                                            ],
-                                            'displaylogo': False       # Enlève le logo Plotly
-                                            }
-                        )
-                    else:
-                        st.info("Données non disponibles.")
-                except Exception as e:
-                    st.error("Installez plotly pour voir ce graphique : pip install plotly")
-
-                st.divider()
-                st.subheader("🏆 Modèles de Valorisation")
-                v_configs = [
-                    ("1️⃣ Modèle BNA (Forward)", fd['val_bna'], f"BNA Fwd ({clean_num(fd['eps_fwd'])}) × PER Fwd ({fd['per_fwd']})"),
-                    ("2️⃣ Modèle FCF (Moyen)", fd['val_fcf'], f"(FCF/Action {clean_num(fd['fcf_ps'])}) × 1.05 × PER Fwd"),
-                    ("3️⃣ Analystes", fd['target_mean'], f"Moyenne de {fd['num_analysts']} opinions")
-                ]
-                for title, val, formula in v_configs:
-                    if val > 0:
-                        with st.expander(f"{title} : {clean_num(val)} {fd['currency']}", expanded=True):
-                            st.caption(f"Calcul : {formula}")
-                            m1, m2, m3, m4 = st.columns(4)
-                            m1.metric("Juste Prix", clean_num(val))
-                            m2.metric("-10%", clean_num(val*0.9))
-                            m3.metric("-12%", clean_num(val*0.88))
-                            m4.metric("-15%", clean_num(val*0.85))
-            with c2:
-                st.metric("Prix Actuel", f"{clean_num(d['Prix Actuel'])} {fd['currency']}")
-                st.markdown(f"<div style='background:#28a745; color:white; padding:25px; border-radius:15px; text-align:center;'><small>ENTRÉE CONSEILLÉE (-15%)</small><br/><span style='font-size:36px; font-weight:bold;'>{clean_num(fd['fair_avg']*0.85)}</span></div>", unsafe_allow_html=True)
-                st.divider()
-                st.write(f"**Dividende :** {clean_num(d['Dividende (€/$)'])} {fd['currency']} ({d['Rendement %']}%)")
-                st.write(f"**Détachement :** {d['Date Détachement']}")
-                st.write(f"**Avis :** {d['Avis Analystes']} | **Secteur :** {d['Secteur']}")
-
-                # --- Mise en place et affichage de la partie "Dernières Actualités dans la vue avancée de l'action"  ---
-                mode_fr = False  # Valeur par défaut pour éviter l'erreur Pylance
-                ticker_clean = "AAPL"
-                # --- 1. IDENTIFICATION DU TICKER ---
-                if d and 'Ticker' in d:
-                    # On nettoie le ticker (ex: MC.PA -> MC)
-                    ticker_clean = str(d['Ticker']).split('.')[0].upper()
-                    nom_action_vue = d.get('Nom', ticker_clean) # On récupère le nom depuis le DataFrame
-                else:
-                    ticker_clean = "AAPL"
-                    nom_action_vue = "Apple"
-
-                #  --- Affichage bouton DANS LA VUE DÉTAILLÉE ---
-                st.divider()
-                # Création d'une ligne avec Titre à gauche et Bouton à droite
-                col_titre, col_switch = st.columns([3, 1])
-                
-                with col_titre:
-                    st.markdown(f"### 📰 Dernières Actualités : {nom_action_vue}")
-                with col_switch:
-                    # On affiche le bouton ici aussi. 
-                    # TRÈS IMPORTANT : Utilise la même clé 'mode_fr' pour qu'ils soient synchronisés !
-                    mode_fr = st.toggle("FR", help="Traduction automatique des titres en français", value=mode_fr)
-
-                # --- 2. COLLECTE ET TRI ---
-                all_news = get_quick_news(ticker_clean)
-
-                if all_news:
-                    # Tri chronologique robuste
-                    all_news.sort(key=lambda x: x.get('dt_obj', datetime.now()), reverse=True)
-                    
-                    unique_news = []
-                    titres_vus = set()
-                    
-                    for article in all_news:
-                        t_brut = article.get('titre', '').lower().strip()
-                        if t_brut not in titres_vus:
-                            unique_news.append(article)
-                            titres_vus.add(t_brut)
-                
-                query = st.session_state.get("main_search", "") # Si tu as une barre de recherche
-
-                if query:
-                    q = query.lower()
-                    unique_news = [
-                        a for a in unique_news 
-                        if q in a.get('titre', '').lower() 
-                        or q in a.get('source', '').lower()
-                        or q in a.get('ticker_parent', '').lower()
-                    ]
-
-                # --- 3. BOUCLE D'AFFICHAGE ---
-                for article in unique_news[:20]:
-                    
-                    lien_reel = article.get('lien', '#') 
-                    source = article.get('source', 'Info').strip('() ')
-                    date = article.get('date', 'Auj.')
-                    badge = article.get('badge', '🌐')
-                    titre_brut = article.get('titre', 'Sans titre')
-                    is_seeking = "seekingalpha.com" in lien_reel.lower()
-                    # Détection anglais
-                    mots_en = {'the', 'stock', 'growth', 'fed', 'market', 'earnings'}
-                    est_anglais = any(w in titre_brut.lower() for w in mots_en) or "seekingalpha" in lien_reel.lower()
-                    
-                    # Traduction
-                    if mode_fr and est_anglais:
-                        titre_affiche = safe_translate(titre_brut)
-                    else:
-                        titre_affiche = titre_brut
-
-                    label = f"{badge} | **{date}** | {titre_affiche}"
-
-                    with st.expander(label):
-                        st.write(f"**Origine :** {source}")
+                        s_obj = yf.Ticker(d['Ticker'])
+                        current_yr = datetime.now().year
                         
-                        if is_seeking or not est_anglais:
-                            # Article déjà en français
-                            st.link_button("📖 Lire l'article complet", lien_reel, use_container_width=True)
+                        # Récupération historique pour calcul MA50
+                        from datetime import timedelta
+                        date_debut_calcul = (datetime(current_yr, 1, 1) - timedelta(days=100)).strftime('%Y-%m-%d')
+                        h_data_large = s_obj.history(start=date_debut_calcul)
+
+                        if not h_data_large.empty:
+                            h_data_large['MA50'] = h_data_large['Close'].rolling(window=50).mean()
+                            h_data = h_data_large[h_data_large.index >= f"{current_yr}-01-01"]
+
+                            # --- 1. CALCUL COULEUR VOLUME (Vert si hausse, Rouge si baisse) ---
+                            colors = ['#28a745' if row['Close'] >= row['Open'] else '#dc3545' 
+                                    for _, row in h_data.iterrows()]
+
+                            fig = make_subplots(specs=[[{"secondary_y": True}]])
+
+                            # Courbe du prix
+                            fig.add_trace(go.Scatter(x=h_data.index, y=h_data['Close'], name="Prix", line=dict(color='#28a745', width=2)), secondary_y=False)
+                            
+                            # MA50
+                            fig.add_trace(go.Scatter(x=h_data.index, y=h_data['MA50'], name="MA50", line=dict(color='orange', dash='dot')), secondary_y=False)
+
+                            # Volumes colorés
+                            fig.add_trace(go.Bar(x=h_data.index, y=h_data['Volume'], name="Volume", marker_color=colors, opacity=0.3), secondary_y=True)
+
+                            # --- 2. TRACÉ DES LIGNES HORIZONTALES ---
+                            prix_actuel = d['Prix Actuel']
+                            # Ligne Prix Actuel
+                            fig.add_hline(y=prix_actuel, line_dash="dash", line_color="gray", 
+                                        annotation_text=f"Actuel: {prix_actuel}", annotation_position="bottom right")
+                            
+                            # Ligne Zone d'Achat (-15%)
+                            prix_achat = prix_actuel * 0.85
+                            fig.add_hline(y=prix_achat, line_dash="dot", line_color="#28a745", 
+                                        annotation_text="Zone d'achat (-15%)", annotation_position="top left")
+
+                            # Mise en forme
+                            # On récupère le nom et le ticker pour le titre
+                            nom_action = d.get('Nom', 'Action')
+                            ticker_action = d.get('Ticker', '')
+                            fig.update_layout(
+                                title={
+                                    'text': f" {nom_action} ({ticker_action})",
+                                    'y': 0.95,
+                                    'x': 0.5,
+                                    'xanchor': 'center',
+                                    'yanchor': 'top',
+                                    'font': {'size': 20}
+                                },
+                                height=450, margin=dict(l=0, r=0, t=30, b=0), hovermode="x unified", template="plotly_white")
+                            fig.update_yaxes(title_text="Prix", secondary_y=False, showgrid=True, gridcolor='lightgray', fixedrange=False)
+                            fig.update_yaxes(title_text="Volume", secondary_y=True, showgrid=False, fixedrange=False)
+
+                            st.plotly_chart(fig, use_container_width=True,
+                                            config={
+                                                'scrollZoom': True,        # Active la roulette
+                                                'displayModeBar': True, 
+                                                'editable': True,  # Affiche la barre d'outils en haut à droite
+                                                'modeBarButtonsToAdd': [
+                                                    'drawline',     # Tracer des lignes droites
+                                                    'drawrect',     # Tracer des zones (rectangles)
+                                                    'eraseshape'    # Gomme pour effacer tes tracés
+                                                ],
+                                                'displaylogo': False       # Enlève le logo Plotly
+                                                }
+                            )
                         else:
-                            # Article Anglais : Double bouton comme tu aimais
-                            c1, c2 = st.columns(2)
-                            with c1:
-                                st.link_button("📄 Original (EN)", lien_reel, use_container_width=True)
-                            with c2:
-                                # On affiche le bouton Google Translate pour toutes les autres sources
-                                lien_propre = urllib.parse.quote(lien_reel, safe='')
-                                url_t = f"https://translate.google.com/translate?sl=auto&tl=fr&u={lien_propre}"
-                                #url_t = f"https://translate.google.com/translate?sl=auto&tl=fr&u={lien_reel}"
-                                st.link_button("🇫🇷 Traduire Page", url_t, type="primary", use_container_width=True)
+                            st.info("Données non disponibles.")
+                    except Exception as e:
+                        st.error("Installez plotly pour voir ce graphique : pip install plotly")
+
+                    st.divider()
+                    st.subheader("🏆 Modèles de Valorisation")
+                    v_configs = [
+                        ("1️⃣ Modèle BNA (Forward)", fd['val_bna'], f"BNA Fwd ({clean_num(fd['eps_fwd'])}) × PER Fwd ({fd['per_fwd']})"),
+                        ("2️⃣ Modèle FCF (Moyen)", fd['val_fcf'], f"(FCF/Action {clean_num(fd['fcf_ps'])}) × 1.05 × PER Fwd"),
+                        ("3️⃣ Analystes", fd['target_mean'], f"Moyenne de {fd['num_analysts']} opinions")
+                    ]
+                    for title, val, formula in v_configs:
+                        if val > 0:
+                            with st.expander(f"{title} : {clean_num(val)} {fd['currency']}", expanded=True):
+                                st.caption(f"Calcul : {formula}")
+                                m1, m2, m3, m4 = st.columns(4)
+                                m1.metric("Juste Prix", clean_num(val))
+                                m2.metric("-10%", clean_num(val*0.9))
+                                m3.metric("-12%", clean_num(val*0.88))
+                                m4.metric("-15%", clean_num(val*0.85))
+                with c2:
+                    st.metric("Prix Actuel", f"{clean_num(d['Prix Actuel'])} {fd['currency']}")
+                    st.markdown(f"<div style='background:#28a745; color:white; padding:25px; border-radius:15px; text-align:center;'><small>ENTRÉE CONSEILLÉE (-15%)</small><br/><span style='font-size:36px; font-weight:bold;'>{clean_num(fd['fair_avg']*0.85)}</span></div>", unsafe_allow_html=True)
+                    st.divider()
+                    st.write(f"**Dividende :** {clean_num(d['Dividende (€/$)'])} {fd['currency']} ({d['Rendement %']}%)")
+                    st.write(f"**Détachement :** {d['Date Détachement']}")
+                    st.write(f"**Avis :** {d['Avis Analystes']} | **Secteur :** {d['Secteur']}")
+
+                    # --- Mise en place et affichage de la partie "Dernières Actualités dans la vue avancée de l'action"  ---
+                    mode_fr = False  # Valeur par défaut pour éviter l'erreur Pylance
+                    ticker_clean = "AAPL"
+                    # --- 1. IDENTIFICATION DU TICKER ---
+                    if d and 'Ticker' in d:
+                        # On nettoie le ticker (ex: MC.PA -> MC)
+                        ticker_clean = str(d['Ticker']).split('.')[0].upper()
+                        nom_action_vue = d.get('Nom', ticker_clean) # On récupère le nom depuis le DataFrame
+                    else:
+                        ticker_clean = "AAPL"
+                        nom_action_vue = "Apple"
+
+                    #  --- Affichage bouton DANS LA VUE DÉTAILLÉE ---
+                    st.divider()
+                    # Création d'une ligne avec Titre à gauche et Bouton à droite
+                    col_titre, col_switch = st.columns([3, 1])
+                    
+                    with col_titre:
+                        st.markdown(f"### 📰 Dernières Actualités : {nom_action_vue}")
+                    with col_switch:
+                        # On affiche le bouton ici aussi. 
+                        # TRÈS IMPORTANT : Utilise la même clé 'mode_fr' pour qu'ils soient synchronisés !
+                        mode_fr = st.toggle("FR", help="Traduction automatique des titres en français", value=mode_fr)
+
+                    # --- 2. COLLECTE ET TRI ---
+                    all_news = get_quick_news(ticker_clean)
+
+                    if all_news:
+                        # Tri chronologique robuste
+                        all_news.sort(key=lambda x: x.get('dt_obj', datetime.now()), reverse=True)
                         
+                        unique_news = []
+                        titres_vus = set()
+                        
+                        for article in all_news:
+                            t_brut = article.get('titre', '').lower().strip()
+                            if t_brut not in titres_vus:
+                                unique_news.append(article)
+                                titres_vus.add(t_brut)
+                    
+                    query = st.session_state.get("main_search", "") # Si tu as une barre de recherche
+
+                    if query:
+                        q = query.lower()
+                        unique_news = [
+                            a for a in unique_news 
+                            if q in a.get('titre', '').lower() 
+                            or q in a.get('source', '').lower()
+                            or q in a.get('ticker_parent', '').lower()
+                        ]
+
+                    # --- 3. BOUCLE D'AFFICHAGE ---
+                    for article in unique_news[:20]:
+                        
+                        lien_reel = article.get('lien', '#') 
+                        source = article.get('source', 'Info').strip('() ')
+                        date = article.get('date', 'Auj.')
+                        badge = article.get('badge', '🌐')
+                        titre_brut = article.get('titre', 'Sans titre')
+                        is_seeking = "seekingalpha.com" in lien_reel.lower()
+                        # Détection anglais
+                        mots_en = {'the', 'stock', 'growth', 'fed', 'market', 'earnings'}
+                        est_anglais = any(w in titre_brut.lower() for w in mots_en) or "seekingalpha" in lien_reel.lower()
+                        
+                        # Traduction
                         if mode_fr and est_anglais:
-                            st.caption(f"Original : {titre_brut}")
+                            titre_affiche = safe_translate(titre_brut)
+                        else:
+                            titre_affiche = titre_brut
+
+                        label = f"{badge} | **{date}** | {titre_affiche}"
+
+                        with st.expander(label):
+                            st.write(f"**Origine :** {source}")
+                            
+                            if is_seeking or not est_anglais:
+                                # Article déjà en français
+                                st.link_button("📖 Lire l'article complet", lien_reel, use_container_width=True)
+                            else:
+                                # Article Anglais : Double bouton comme tu aimais
+                                c1, c2 = st.columns(2)
+                                with c1:
+                                    st.link_button("📄 Original (EN)", lien_reel, use_container_width=True)
+                                with c2:
+                                    # On affiche le bouton Google Translate pour toutes les autres sources
+                                    lien_propre = urllib.parse.quote(lien_reel, safe='')
+                                    url_t = f"https://translate.google.com/translate?sl=auto&tl=fr&u={lien_propre}"
+                                    #url_t = f"https://translate.google.com/translate?sl=auto&tl=fr&u={lien_reel}"
+                                    st.link_button("🇫🇷 Traduire Page", url_t, type="primary", use_container_width=True)
+                            
+                            if mode_fr and est_anglais:
+                                st.caption(f"Original : {titre_brut}")
