@@ -520,6 +520,7 @@ def calculate_piotroski_advanced(stock):
 
 @st.cache_data(ttl=3600)
 def fetch_stock_data(ticker_str):
+    yf.set_tz_cache_location("/tmp")  # Parfois aide sur Streamlit Cloud
     try:
         s = yf.Ticker(ticker_str.strip())
         info = s.info
