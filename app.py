@@ -854,10 +854,10 @@ if t_list:
                     col_fcf = 'Entrée FCF -15%'
                     if col_bna in df.columns and col_fcf in df.columns:
                         moyenne_entrees = (df[col_bna].fillna(0) + df[col_fcf].fillna(0)) / 2
-                        mask_synth = moyenne_entrees < p_actuel
+                        mask_synth = moyenne_entrees > p_actuel
                         styles.loc[mask_synth, 'Entrée Synthèse (-15%)'] += 'background-color: #28a745; color: white;'
                     else:
-                        mask_synth = df['Entrée Synthèse (-15%)'] > p_actuel
+                        mask_synth = df['Entrée Synthèse (-15%)'] < p_actuel
                         styles.loc[mask_synth, 'Entrée Synthèse (-15%)'] += 'background-color: #28a745; color: white;'
 
             for col_peg in ['PEG Actuel', 'PEG Forward']:
