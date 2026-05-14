@@ -919,12 +919,24 @@ if t_list:
                         mask = df[col].fillna(0) > p_actuel
                         styles.loc[mask, col] = 'background-color: #d4edda; color: #155724;'
 
-                # Entrée Synthèse (Vert si > Prix + Mise en avant)
-                if 'Entrée Synthèse (-15%)' in df.columns:
+                # Entrée Synthèse : Vert SEULEMENT si la moyenne BNA + FCF est < Prix Actuel
+            if 'Entrée Synthèse (-15%)' in df.columns:
+                styles['Entrée Synthèse (-15%)'] = 'border-left: 2px solid #555; border-right: 2px solid #555; font-weight: bold;'
+                
+                # On vérifie que les deux colonnes sources existent
+                col_bna = 'Entrée BNA -15%'
+                col_fcf = 'Entrée FCF -15%'
+                
+                if col_bna in df.columns and col_fcf in df.columns:
+                    # Moyenne des deux points d'entrée
+                    moyenne_entrees = (df[col_bna].fillna(0) + df[col_fcf].fillna(0)) / 2
+                    # Signal achat : la moyenne est INFÉRIEURE au prix actuel
+                    # (les actions sont "à prix raisonnable" selon les deux modèles)
+                    mask_synth = moyenne_entrees < p_actuel
+                    styles.loc[mask_synth, 'Entrée Synthèse (-15%)'] += 'background-color: #28a745; color: white;'
+                else:
+                    # Fallback si une colonne manque
                     mask_synth = df['Entrée Synthèse (-15%)'] > p_actuel
-                    # Style de base pour la colonne (Bordure et gras)
-                    styles['Entrée Synthèse (-15%)'] = 'border-left: 2px solid #555; border-right: 2px solid #555; font-weight: bold;'
-                    # Coloration si signal achat
                     styles.loc[mask_synth, 'Entrée Synthèse (-15%)'] += 'background-color: #28a745; color: white;'
 
             # --- COLORATION PIOTROSKI ---
@@ -1034,64 +1046,168 @@ if t_list:
 
                         if not h_data_large.empty:
                             h_data_large['MA50'] = h_data_large['Close'].rolling(window=50).mean()
+                            h_data_large['MA20'] = h_data_large['Close'].rolling(window=20).mean()
+                            
+                            # --- BOLLINGER BANDS ---
+                            h_data_large['BB_std'] = h_data_large['Close'].rolling(window=20).std()
+                            h_data_large['BB_upper'] = h_data_large['MA20'] + (h_data_large['BB_std'] * 2)
+                            h_data_large['BB_lower'] = h_data_large['MA20'] - (h_data_large['BB_std'] * 2)
+                            
+                            # --- RSI (14 périodes) ---
+                            delta = h_data_large['Close'].diff()
+                            gain = delta.clip(lower=0).rolling(14).mean()
+                            loss = (-delta.clip(upper=0)).rolling(14).mean()
+                            rs = gain / loss.replace(0, float('nan'))
+                            h_data_large['RSI'] = 100 - (100 / (1 + rs))
+                            
+                            # --- MACD ---
+                            ema12 = h_data_large['Close'].ewm(span=12, adjust=False).mean()
+                            ema26 = h_data_large['Close'].ewm(span=26, adjust=False).mean()
+                            h_data_large['MACD'] = ema12 - ema26
+                            h_data_large['MACD_signal'] = h_data_large['MACD'].ewm(span=9, adjust=False).mean()
+                            h_data_large['MACD_hist'] = h_data_large['MACD'] - h_data_large['MACD_signal']
+                            
+                            # On filtre APRÈS les calculs (pour avoir les bonnes valeurs MA50, etc.)
                             h_data = h_data_large[h_data_large.index >= f"{current_yr}-01-01"]
 
-                            # --- 1. CALCUL COULEUR VOLUME (Vert si hausse, Rouge si baisse) ---
-                            colors = ['#28a745' if row['Close'] >= row['Open'] else '#dc3545' 
+                            colors = ['#28a745' if row['Close'] >= row['Open'] else '#dc3545'
                                     for _, row in h_data.iterrows()]
 
-                            fig = make_subplots(specs=[[{"secondary_y": True}]])
+                            # Choix d'indicateur
+                            indicateur_choisi = st.radio(
+                                "Indicateur technique :",
+                                ["Bollinger + MA", "RSI", "MACD"],
+                                horizontal=True,
+                                key=f"indic_{d['Ticker']}"
+                            )
 
-                            # Courbe du prix
-                            fig.add_trace(go.Scatter(x=h_data.index, y=h_data['Close'], name="Prix", line=dict(color='#28a745', width=2)), secondary_y=False)
-                            
-                            # MA50
-                            fig.add_trace(go.Scatter(x=h_data.index, y=h_data['MA50'], name="MA50", line=dict(color='orange', dash='dot')), secondary_y=False)
+                            # Subplots : 2 rangées (prix + indicateur)
+                            fig = make_subplots(
+                                rows=2, cols=1,
+                                shared_xaxes=True,
+                                row_heights=[0.65, 0.35],
+                                vertical_spacing=0.05,
+                                specs=[[{"secondary_y": True}], [{"secondary_y": False}]]
+                            )
 
-                            # Volumes colorés
-                            fig.add_trace(go.Bar(x=h_data.index, y=h_data['Volume'], name="Volume", marker_color=colors, opacity=0.3), secondary_y=True)
+                            # --- RANGÉE 1 : Prix ---
+                            fig.add_trace(go.Scatter(
+                                x=h_data.index, y=h_data['Close'],
+                                name="Prix", line=dict(color='#1a73e8', width=2)
+                            ), row=1, col=1, secondary_y=False)
 
-                            # --- 2. TRACÉ DES LIGNES HORIZONTALES ---
+                            fig.add_trace(go.Scatter(
+                                x=h_data.index, y=h_data['MA50'],
+                                name="MA50", line=dict(color='orange', dash='dot', width=1.5)
+                            ), row=1, col=1, secondary_y=False)
+
+                            if indicateur_choisi == "Bollinger + MA":
+                                fig.add_trace(go.Scatter(
+                                    x=h_data.index, y=h_data['BB_upper'],
+                                    name="BB Sup", line=dict(color='rgba(100,100,200,0.4)', width=1),
+                                    fill=None
+                                ), row=1, col=1, secondary_y=False)
+                                fig.add_trace(go.Scatter(
+                                    x=h_data.index, y=h_data['BB_lower'],
+                                    name="BB Inf", line=dict(color='rgba(100,100,200,0.4)', width=1),
+                                    fill='tonexty', fillcolor='rgba(100,100,200,0.07)'
+                                ), row=1, col=1, secondary_y=False)
+                                fig.add_trace(go.Scatter(
+                                    x=h_data.index, y=h_data['MA20'],
+                                    name="MA20", line=dict(color='purple', dash='dot', width=1)
+                                ), row=1, col=1, secondary_y=False)
+
+                            # Volumes sur axe secondaire (rangée 1)
+                            fig.add_trace(go.Bar(
+                                x=h_data.index, y=h_data['Volume'],
+                                name="Volume", marker_color=colors, opacity=0.25
+                            ), row=1, col=1, secondary_y=True)
+
+                            # Lignes horizontales prix actuel et zone d'achat
                             prix_actuel = d['Prix Actuel']
-                            # Ligne Prix Actuel
-                            fig.add_hline(y=prix_actuel, line_dash="dash", line_color="gray", 
-                                        annotation_text=f"Actuel: {prix_actuel}", annotation_position="bottom right")
-                            
-                            # Ligne Zone d'Achat (-15%)
-                            prix_achat = prix_actuel * 0.85
-                            fig.add_hline(y=prix_achat, line_dash="dot", line_color="#28a745", 
-                                        annotation_text="Zone d'achat (-15%)", annotation_position="top left")
+                            fig.add_hline(y=prix_actuel, line_dash="dash", line_color="gray",
+                                        annotation_text=f"Actuel: {prix_actuel:.2f}", row=1, col=1)
+                            fig.add_hline(y=prix_actuel * 0.85, line_dash="dot", line_color="#28a745",
+                                        annotation_text="Zone achat (-15%)", row=1, col=1)
 
-                            # Mise en forme
-                            # On récupère le nom et le ticker pour le titre
+                            # --- RANGÉE 2 : Indicateur choisi ---
+                            if indicateur_choisi == "RSI":
+                                fig.add_trace(go.Scatter(
+                                    x=h_data.index, y=h_data['RSI'],
+                                    name="RSI(14)", line=dict(color='#9c27b0', width=2)
+                                ), row=2, col=1)
+                                # Zones de surachat / survente
+                                fig.add_hrect(y0=70, y1=100, fillcolor="rgba(220,53,69,0.08)",
+                                            line_width=0, row=2, col=1)
+                                fig.add_hrect(y0=0, y1=30, fillcolor="rgba(40,167,69,0.08)",
+                                            line_width=0, row=2, col=1)
+                                fig.add_hline(y=70, line_color="rgba(220,53,69,0.5)", line_dash="dot", row=2, col=1,
+                                            annotation_text="Surachat 70", annotation_position="right")
+                                fig.add_hline(y=30, line_color="rgba(40,167,69,0.5)", line_dash="dot", row=2, col=1,
+                                            annotation_text="Survente 30", annotation_position="right")
+                                fig.update_yaxes(range=[0, 100], title_text="RSI", row=2, col=1)
+
+                            elif indicateur_choisi == "MACD":
+                                macd_colors = ['#28a745' if v >= 0 else '#dc3545'
+                                            for v in h_data['MACD_hist'].fillna(0)]
+                                fig.add_trace(go.Bar(
+                                    x=h_data.index, y=h_data['MACD_hist'],
+                                    name="Histogramme", marker_color=macd_colors, opacity=0.6
+                                ), row=2, col=1)
+                                fig.add_trace(go.Scatter(
+                                    x=h_data.index, y=h_data['MACD'],
+                                    name="MACD", line=dict(color='#1a73e8', width=1.5)
+                                ), row=2, col=1)
+                                fig.add_trace(go.Scatter(
+                                    x=h_data.index, y=h_data['MACD_signal'],
+                                    name="Signal", line=dict(color='orange', width=1.5)
+                                ), row=2, col=1)
+                                fig.add_hline(y=0, line_color="gray", line_dash="dot", row=2, col=1)
+                                fig.update_yaxes(title_text="MACD", row=2, col=1)
+
+                            elif indicateur_choisi == "Bollinger + MA":
+                                # Rangée 2 : %B (position du prix dans les bandes)
+                                h_data = h_data.copy()
+                                bb_range = h_data['BB_upper'] - h_data['BB_lower']
+                                h_data['BB_pct'] = ((h_data['Close'] - h_data['BB_lower']) / bb_range.replace(0, float('nan'))) * 100
+                                fig.add_trace(go.Scatter(
+                                    x=h_data.index, y=h_data['BB_pct'],
+                                    name="%B Bollinger", line=dict(color='purple', width=2)
+                                ), row=2, col=1)
+                                fig.add_hrect(y0=80, y1=120, fillcolor="rgba(220,53,69,0.08)", line_width=0, row=2, col=1)
+                                fig.add_hrect(y0=-20, y1=20, fillcolor="rgba(40,167,69,0.08)", line_width=0, row=2, col=1)
+                                fig.add_hline(y=80, line_color="rgba(220,53,69,0.4)", line_dash="dot", row=2, col=1,
+                                            annotation_text="Haut BB", annotation_position="right")
+                                fig.add_hline(y=20, line_color="rgba(40,167,69,0.4)", line_dash="dot", row=2, col=1,
+                                            annotation_text="Bas BB", annotation_position="right")
+                                fig.update_yaxes(title_text="%B", row=2, col=1)
+
                             nom_action = d.get('Nom', 'Action')
                             ticker_action = d.get('Ticker', '')
                             fig.update_layout(
                                 title={
-                                    'text': f" {nom_action} ({ticker_action})",
-                                    'y': 0.95,
-                                    'x': 0.5,
-                                    'xanchor': 'center',
-                                    'yanchor': 'top',
-                                    'font': {'size': 20}
+                                    'text': f"{nom_action} ({ticker_action}) — {indicateur_choisi}",
+                                    'y': 0.98, 'x': 0.5, 'xanchor': 'center', 'yanchor': 'top',
+                                    'font': {'size': 18}
                                 },
-                                height=450, margin=dict(l=0, r=0, t=30, b=0), hovermode="x unified", template="plotly_white")
-                            fig.update_yaxes(title_text="Prix", secondary_y=False, showgrid=True, gridcolor='lightgray', fixedrange=False)
-                            fig.update_yaxes(title_text="Volume", secondary_y=True, showgrid=False, fixedrange=False)
-
-                            st.plotly_chart(fig, width="stretch",
-                                            config={
-                                                'scrollZoom': True,        # Active la roulette
-                                                'displayModeBar': True, 
-                                                'editable': True,  # Affiche la barre d'outils en haut à droite
-                                                'modeBarButtonsToAdd': [
-                                                    'drawline',     # Tracer des lignes droites
-                                                    'drawrect',     # Tracer des zones (rectangles)
-                                                    'eraseshape'    # Gomme pour effacer tes tracés
-                                                ],
-                                                'displaylogo': False       # Enlève le logo Plotly
-                                                }
+                                height=600,
+                                margin=dict(l=0, r=0, t=40, b=0),
+                                hovermode="x unified",
+                                template="plotly_white",
+                                legend=dict(orientation="h", yanchor="bottom", y=1.01, xanchor="right", x=1)
                             )
+                            fig.update_yaxes(title_text="Prix", secondary_y=False, row=1, col=1,
+                                            showgrid=True, gridcolor='lightgray')
+                            fig.update_yaxes(title_text="Volume", secondary_y=True, row=1, col=1, showgrid=False)
+                            fig.update_xaxes(showgrid=False)
+
+                            st.plotly_chart(fig, use_container_width=True, config={
+                                'scrollZoom': True,
+                                'displayModeBar': True,
+                                'editable': True,
+                                'modeBarButtonsToAdd': ['drawline', 'drawrect', 'eraseshape'],
+                                'displaylogo': False
+                            })
                         else:
                             st.info("Données non disponibles.")
                     except Exception as e:
