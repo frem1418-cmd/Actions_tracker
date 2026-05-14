@@ -7,7 +7,6 @@ from datetime import datetime, timedelta
 from textblob import TextBlob
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-import requests
 import time
 from bs4 import BeautifulSoup
 import streamlit as st
@@ -18,58 +17,12 @@ import urllib.parse
 import logging
 logging.getLogger("streamlit").setLevel(logging.ERROR)
 
-# Initialisation de la connexion (à faire une seule fois)
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-@st.cache_data(ttl=900)
-def get_bundle_news(liste_tickers, ticker_to_name=None):
-    if ticker_to_name is None:
-        ticker_to_name = {}
-    all_news_combined = []
-    
-    with ThreadPoolExecutor(max_workers=15) as executor:
-        future_to_ticker = {executor.submit(get_quick_news, t): t for t in liste_tickers}
-        
-        for future in future_to_ticker:
-            ticker_parent = future_to_ticker[future]
-            try:
-                articles = future.result(timeout=10)
-                if articles:
-                    for a in articles:
-                        a['ticker_parent'] = ticker_parent
-                        a['nom_propre'] = ticker_to_name.get(ticker_parent, ticker_parent)
-                        all_news_combined.append(a)
-            except Exception as e:
-                print(f"Erreur sur {ticker_parent}: {e}")
-                continue
-                
-    return all_news_combined
+# =======================================================================
+# FONCTIONS NEWS
+# =======================================================================
 
-
-@st.cache_data(ttl=3600)
-def safe_translate(text):
-    if not text or len(text) < 5:
-        return text
-    try:
-        return GoogleTranslator(source='auto', target='fr').translate(text)
-    except:
-        return text
-
-@st.cache_data(ttl=3600)
-def translate_batch(titles_list):
-    if not titles_list:
-        return []
-    try:
-        combined_text = " ||| ".join(titles_list)
-        translated_text = GoogleTranslator(source='auto', target='fr').translate(combined_text)
-        translated_list = [t.strip() for t in translated_text.split("|||")]
-        if len(translated_list) != len(titles_list):
-            return titles_list
-        return translated_list
-    except Exception as e:
-        print(f"Erreur batch translation: {e}")
-        return titles_list
-   
 @st.cache_data(ttl=900)
 def get_quick_news(ticker):
     news_list = []
@@ -86,16 +39,13 @@ def get_quick_news(ticker):
                     parts = e.title.rsplit(' - ', 1)
                     clean_title = parts[0]
                     source_name = parts[1] if len(parts) > 1 else default_source
-                    
                     pol = TextBlob(clean_title).sentiment.polarity
                     sentiment_label = "Positif" if pol > 0.1 else "Négatif" if pol < -0.1 else "Neutre"
                     icon_sent = "🟢" if pol > 0.1 else "🔴" if pol < -0.1 else "⚪"
-
                     try:
                         dt_obj = datetime(*e.published_parsed[:6])
                     except:
                         dt_obj = datetime.now()
-
                     news_list.append({
                         'dt_obj': dt_obj,
                         'titre': clean_title,
@@ -104,10 +54,10 @@ def get_quick_news(ticker):
                         'badge': f"{icon_sent} {badge_icon}",
                         'sentiment': sentiment_label
                     })
-        except: 
+        except:
             pass
         return news_list
-    
+
     def fetch_google_fr(t_clean):
         url = f"https://news.google.com/rss/search?q={t_clean}+bourse&hl=fr&gl=FR&ceid=FR:fr"
         return process_general_google(url, "🇫🇷")
@@ -123,7 +73,7 @@ def get_quick_news(ticker):
     def fetch_google_wires(t_clean):
         url = f"https://news.google.com/rss/search?q={t_clean}+source:PR_Newswire+OR+source:Business_Wire&hl=en-US"
         return process_general_google(url, badge_icon="📄", limit=20)
-    
+
     def fetch_benzinga_fixed(t_clean):
         url = "https://www.benzinga.com/markets/feed"
         return process_general_google(url, "⚡ Benzinga", default_source="Benzinga")
@@ -131,7 +81,7 @@ def get_quick_news(ticker):
     def fetch_seeking(t_clean):
         url = f"https://seekingalpha.com/symbol/{t_clean}/feed"
         return process_general_google(url, badge_icon="[:orange[a]]", default_source="Seeking Alpha", limit=3)
-    
+
     tasks = []
     if '.PA' in ticker.upper():
         tasks.append(fetch_google_fr)
@@ -141,7 +91,7 @@ def get_quick_news(ticker):
             fetch_google_agencies,
             fetch_google_wires,
             fetch_benzinga_fixed,
-            fetch_seeking         
+            fetch_seeking
         ])
 
     with ThreadPoolExecutor(max_workers=len(tasks)) as executor:
@@ -166,13 +116,59 @@ def get_quick_news(ticker):
     return news_list
 
 
+@st.cache_data(ttl=3600)
+def safe_translate(text):
+    if not text or len(text) < 5:
+        return text
+    try:
+        return GoogleTranslator(source='auto', target='fr').translate(text)
+    except:
+        return text
+
+
+@st.cache_data(ttl=3600)
+def translate_batch(titles_list):
+    if not titles_list:
+        return []
+    try:
+        combined_text = " ||| ".join(titles_list)
+        translated_text = GoogleTranslator(source='auto', target='fr').translate(combined_text)
+        translated_list = [t.strip() for t in translated_text.split("|||")]
+        if len(translated_list) != len(titles_list):
+            return titles_list
+        return translated_list
+    except Exception as e:
+        print(f"Erreur batch translation: {e}")
+        return titles_list
+
+
+@st.cache_data(ttl=900)
+def get_bundle_news(liste_tickers, ticker_to_name):
+    all_news_combined = []
+    with ThreadPoolExecutor(max_workers=10) as executor:
+        future_to_ticker = {executor.submit(get_quick_news, t): t for t in liste_tickers}
+        for future in future_to_ticker:
+            ticker_parent = future_to_ticker[future]
+            try:
+                articles = future.result(timeout=10)
+                if articles:
+                    for a in articles:
+                        a['ticker_parent'] = ticker_parent
+                        a['nom_propre'] = ticker_to_name.get(ticker_parent, ticker_parent)
+                        all_news_combined.append(a)
+            except Exception:
+                continue
+    return all_news_combined
+
+
 @st.cache_data(ttl=86400)
 def get_action_name(ticker):
     try:
         return yf.Ticker(ticker).info.get('longName', ticker)
     except:
         return ticker
-    
+
+
 @st.fragment(run_every="5m")
 def news_dashboard_module(liste_tickers):
     col1, col2 = st.columns([0.8, 0.2])
@@ -185,14 +181,13 @@ def news_dashboard_module(liste_tickers):
 
     for t in liste_tickers:
         nom_action = get_action_name(t)
-        
         with st.expander(f"🏢 **{nom_action}** ({t})", expanded=True):
-            articles = get_quick_news(t) 
+            articles = get_quick_news(t)
             if articles:
                 for a in articles:
                     st.markdown(f"{a['badge']} | **{a['date']}** | [{a['titre']}]({a['lien']})")
             else:
-                st.caption(f"Aucune actualité récente pour {t}.")    
+                st.caption(f"Aucune actualité récente pour {t}.")
 
 
 @st.fragment(run_every="5m")
@@ -204,12 +199,12 @@ def actualite_module(liste_tickers):
             placeholder="Action, mot-clé...",
             label_visibility="collapsed",
             key="news_search_input").lower().strip()
-    
+
     with col_trad:
-        mode_global_fr = st.toggle("🇫🇷", help="Traduction des titres en français", 
-                                   value=st.session_state.get('mode_fr', True), 
+        mode_global_fr = st.toggle("🇫🇷", help="Traduction des titres en français",
+                                   value=st.session_state.get('mode_fr', True),
                                    key="mode_fr")
-    
+
     with col_ref:
         if st.button("🔄", help="Actualiser le flux", key="refresh_news_btn"):
             get_quick_news.clear()
@@ -222,7 +217,7 @@ def actualite_module(liste_tickers):
         filtre_sent = st.selectbox(
             "Filtrer par sentiment",
             options=["Tous", "Positifs 🟢", "Négatifs 🔴"],
-            label_visibility="collapsed",            
+            label_visibility="collapsed",
         )
 
     with st.spinner("Récupération des actualités..."):
@@ -232,26 +227,25 @@ def actualite_module(liste_tickers):
 
     unique_news = []
     titres_vus = set()
-    
-    for n in all_news:        
+
+    for n in all_news:
         fingerprint = n['titre'].lower().strip()
         sent_label = n.get('sentiment', 'Neutre')
         match_sent = True
-        
+
         if "Positifs" in filtre_sent and sent_label != "Positif":
             match_sent = False
         elif "Négatifs" in filtre_sent and sent_label != "Négatif":
             match_sent = False
 
-        if match_sent: 
+        if match_sent:
             if fingerprint not in titres_vus:
                 source_brut = n.get('source', '').lower()
                 nom_brut = n.get('nom_propre', '').lower()
-                
-                if not query or (query in fingerprint or 
-                                query in n.get('ticker_parent', '').lower() or 
-                                query in source_brut or 
-                                query in nom_brut):
+                if not query or (query in fingerprint or
+                                 query in n.get('ticker_parent', '').lower() or
+                                 query in source_brut or
+                                 query in nom_brut):
                     unique_news.append(n)
                     titres_vus.add(fingerprint)
 
@@ -263,7 +257,6 @@ def actualite_module(liste_tickers):
             with st.spinner("Traduction des titres..."):
                 titres_originaux = [n['titre'] for n in news_to_display]
                 titres_traduits = translate_batch(titres_originaux)
-                
                 for i, n in enumerate(news_to_display):
                     if i < len(titres_traduits):
                         n['titre_affiche'] = titres_traduits[i]
@@ -275,23 +268,25 @@ def actualite_module(liste_tickers):
             titre_final = n.get('titre_affiche', n['titre'])
             source = n.get('source', 'Info')
             nom_action = n.get('nom_propre', n.get('ticker_parent', 'Action'))
-            
             st.markdown(
                 f"{n['badge']} | {n['date']} | **{nom_action}** : "
                 f"[{titre_final}]({n['lien']}) *({source})*"
-        )
-        
+            )
     else:
         st.info("Aucune actualité trouvée.")
 
     if len(unique_news) > st.session_state.nb_news_display:
-            st.write("---")
-            c1, c2, c3 = st.columns([1, 2, 1])
-            with c2:
-                if st.button(f"Afficher plus de news (+40) ➕", width="stretch"):
-                    st.session_state.nb_news_display += 40
-                    st.rerun()    
+        st.write("---")
+        c1, c2, c3 = st.columns([1, 2, 1])
+        with c2:
+            if st.button(f"Afficher plus de news (+40) ➕", width="stretch"):
+                st.session_state.nb_news_display += 40
+                st.rerun()
 
+
+# =======================================================================
+# WATCHLISTS
+# =======================================================================
 
 @st.cache_data(ttl=3600)
 def load_all_watchlists():
@@ -301,7 +296,8 @@ def load_all_watchlists():
         return df
     except Exception:
         return None
-    
+
+
 @st.cache_data(ttl=600)
 def get_tickers_from_watchlist(watchlist_name):
     df = load_all_watchlists()
@@ -310,49 +306,41 @@ def get_tickers_from_watchlist(watchlist_name):
         if not row.empty:
             return row.iloc[0]['tickers']
     return ""
-    
-@st.cache_data(ttl=900)
-def get_bundle_news(liste_tickers, ticker_to_name):
-    all_news_combined = []
-    
-    with ThreadPoolExecutor(max_workers=10) as executor:
-        future_to_ticker = {executor.submit(get_quick_news, t): t for t in liste_tickers}
-        
-        for future in future_to_ticker:
-            ticker_parent = future_to_ticker[future]
-            try:
-                articles = future.result(timeout=10)
-                if articles:
-                    for a in articles:
-                        a['ticker_parent'] = ticker_parent
-                        a['nom_propre'] = ticker_to_name.get(ticker_parent, ticker_parent)
-                        all_news_combined.append(a)
-            except Exception:
-                continue
-                
-    return all_news_combined
+
 
 @st.cache_data(ttl=3600)
 def get_column_config():
     return conn.read(worksheet="Choix_colonnes")
-    
+
+
 def update_tickers_callback():
     new_val = st.session_state["ticker_editor"].upper()
     save_watchlist_gsheets(sel_list, new_val)
     st.cache_data.clear()
 
 
-# --- RÉFÉRENTIELS ---
+# =======================================================================
+# RÉFÉRENTIELS
+# =======================================================================
+
 SECTORS_FR = {
-    "Basic Materials": "Matériaux de base", "Communication Services": "Services de communication",
-    "Consumer Cyclical": "Consommation cyclique", "Consumer Defensive": "Consommation défensive",
-    "Energy": "Énergie", "Financial Services": "Services financiers", "Healthcare": "Santé",
-    "Industrials": "Industrie", "Real Estate": "Immobilier", "Technology": "Technologie",
-    "Utilities": "Services publics", "Financial": "Finance", "Consumer Discretionary": "Consommation discrétionnaire"
+    "Basic Materials": "Matériaux de base",
+    "Communication Services": "Services de communication",
+    "Consumer Cyclical": "Consommation cyclique",
+    "Consumer Defensive": "Consommation défensive",
+    "Energy": "Énergie",
+    "Financial Services": "Services financiers",
+    "Healthcare": "Santé",
+    "Industrials": "Industrie",
+    "Real Estate": "Immobilier",
+    "Technology": "Technologie",
+    "Utilities": "Services publics",
+    "Financial": "Finance",
+    "Consumer Discretionary": "Consommation discrétionnaire"
 }
 
 RECO_FR = {
-    "strong_buy": "Achat Fort 🚀", "buy": "Achat ✅", "hold": "Conserver ⚖️", 
+    "strong_buy": "Achat Fort 🚀", "buy": "Achat ✅", "hold": "Conserver ⚖️",
     "underperform": "Alléger ⚠️", "sell": "Vendre ❌", "none": "N/A"
 }
 
@@ -365,7 +353,10 @@ EXPLICATIONS = {
 }
 
 
-# --- FONCTIONS DE CALCUL & UTILITAIRES ---
+# =======================================================================
+# FONCTIONS DE CALCUL
+# =======================================================================
+
 def search_ticker(query):
     try:
         if not query: return []
@@ -379,24 +370,29 @@ def search_ticker(query):
                 label = f"{res.get('symbol')} - {res.get('longname')} ({res.get('exchDisp')})"
                 results.append({"label": label, "symbol": res.get('symbol')})
         return results
-    except: return []
+    except:
+        return []
+
 
 def clean_num(n):
     if isinstance(n, str): return n
     if n is None or pd.isna(n): return "0"
     abs_n = abs(n)
     if abs_n >= 1e12: return f"{n/1e12:.2f} Tn"
-    if abs_n >= 1e9: return f"{n/1e9:.2f} Md"
-    if abs_n >= 1e6: return f"{n/1e6:.2f} M"
+    if abs_n >= 1e9:  return f"{n/1e9:.2f} Md"
+    if abs_n >= 1e6:  return f"{n/1e6:.2f} M"
     return "{:g}".format(float("{:.2f}".format(n)))
+
 
 def get_progression_pct(current, previous):
     if previous is None or previous == 0 or pd.isna(previous): return None
     return ((current - previous) / abs(previous)) * 100
 
+
 def calculate_piotroski_advanced(stock):
     try:
         income, balance, cash = stock.financials, stock.balance_sheet, stock.cashflow
+
         def get_val(df, labels, period=0):
             if df is None or df.empty: return None
             available = {k.lower(): k for k in df.index}
@@ -408,73 +404,74 @@ def calculate_piotroski_advanced(stock):
                         if not pd.isna(v): return v
             return None
 
-        ni_keys = ['Net Income', 'NetIncome', 'Net Income Common Stockholders']
-        ocf_keys = ['Operating Cash Flow', 'Total Cash From Operating Activities']
+        ni_keys    = ['Net Income', 'NetIncome', 'Net Income Common Stockholders']
+        ocf_keys   = ['Operating Cash Flow', 'Total Cash From Operating Activities']
         asset_keys = ['Total Assets', 'TotalAssets']
 
-        ni, ocf, assets = get_val(income, ni_keys, 0), get_val(cash, ocf_keys, 0), get_val(balance, asset_keys, 0)
+        ni, ocf, assets       = get_val(income, ni_keys, 0), get_val(cash, ocf_keys, 0), get_val(balance, asset_keys, 0)
         ni_p, ocf_p, assets_p = get_val(income, ni_keys, 1), get_val(cash, ocf_keys, 1), get_val(balance, asset_keys, 1)
 
         if None in [ni, ocf, assets]: return "Incomplet", {}
 
-        roa_n, roa_p = ni/assets, (ni_p/assets_p if assets_p else 0)
+        roa_n, roa_p = ni / assets, (ni_p / assets_p if assets_p else 0)
         q_n, q_p = ocf - ni, (ocf_p - ni_p if (ni_p is not None and ocf_p is not None) else None)
 
         checks = {
-            "Bénéfice Net": {"status": ni > 0, "detail": f"{clean_num(ni)}", "comparaison": f"N-1: {clean_num(ni_p)} ({get_progression_pct(ni, ni_p):+.1f}%)" if ni_p else "> 0"},
-            "Cash Flow Opé.": {"status": ocf > 0, "detail": f"{clean_num(ocf)}", "comparaison": f"N-1: {clean_num(ocf_p)} ({get_progression_pct(ocf, ocf_p):+.1f}%)" if ocf_p else "> 0"},
-            "Progression ROA": {"status": roa_n > roa_p, "detail": f"{roa_n:.2%}", "comparaison": f"N-1: {roa_p:.2%} ({get_progression_pct(roa_n, roa_p):+.1f}%)" if roa_p else "N/A"},
-            "Qualité Gains": {"status": ocf > ni, "detail": f"Δ {clean_num(q_n)}", "comparaison": f"N-1: Δ {clean_num(q_p)} ({get_progression_pct(q_n, q_p):+.1f}%)" if q_p is not None else "OCF > NI"},
-            "Taille Actifs": {"status": assets > (assets_p or 0), "detail": f"{clean_num(assets)}", "comparaison": f"N-1: {clean_num(assets_p)} ({get_progression_pct(assets, assets_p):+.1f}%)" if assets_p else "N/A"}
+            "Bénéfice Net":    {"status": ni > 0,       "detail": f"{clean_num(ni)}",    "comparaison": f"N-1: {clean_num(ni_p)} ({get_progression_pct(ni, ni_p):+.1f}%)" if ni_p else "> 0"},
+            "Cash Flow Opé.":  {"status": ocf > 0,      "detail": f"{clean_num(ocf)}",   "comparaison": f"N-1: {clean_num(ocf_p)} ({get_progression_pct(ocf, ocf_p):+.1f}%)" if ocf_p else "> 0"},
+            "Progression ROA": {"status": roa_n > roa_p,"detail": f"{roa_n:.2%}",        "comparaison": f"N-1: {roa_p:.2%} ({get_progression_pct(roa_n, roa_p):+.1f}%)" if roa_p else "N/A"},
+            "Qualité Gains":   {"status": ocf > ni,     "detail": f"Δ {clean_num(q_n)}", "comparaison": f"N-1: Δ {clean_num(q_p)} ({get_progression_pct(q_n, q_p):+.1f}%)" if q_p is not None else "OCF > NI"},
+            "Taille Actifs":   {"status": assets > (assets_p or 0), "detail": f"{clean_num(assets)}", "comparaison": f"N-1: {clean_num(assets_p)} ({get_progression_pct(assets, assets_p):+.1f}%)" if assets_p else "N/A"}
         }
         return f"{sum(1 for c in checks.values() if c['status'])}/5", checks
-    except: return "N/A", {}
+    except:
+        return "N/A", {}
+
 
 @st.cache_data(ttl=3600)
 def fetch_stock_data(ticker_str):
     yf.set_tz_cache_location("/tmp")
     try:
-        s = yf.Ticker(ticker_str.strip())
+        s    = yf.Ticker(ticker_str.strip())
         info = s.info
-        p = info.get("currentPrice") or info.get("regularMarketPrice")
+        p    = info.get("currentPrice") or info.get("regularMarketPrice")
         if p is None: return None
+
         ef, pf = info.get("forwardEps", 0), info.get("forwardPE", 15)
-        vb = ef * pf
-        tm = info.get("targetMeanPrice", 0)
-        sh = info.get("sharesOutstanding", 1)
+        vb     = ef * pf
+        tm     = info.get("targetMeanPrice", 0)
+        sh     = info.get("sharesOutstanding", 1)
+
         fcf_raw = s.cashflow.loc["Free Cash Flow"].dropna().head(3).mean() if "Free Cash Flow" in s.cashflow.index else 0
-        vf = (fcf_raw/sh * 1.05) * pf if sh > 0 else 0
+        vf  = (fcf_raw / sh * 1.05) * pf if sh > 0 else 0
         mods = [v for v in [vb, vf, tm] if v > 0]
-        avg = sum(mods)/len(mods) if mods else 0
+        avg  = sum(mods) / len(mods) if mods else 0
         p_s, p_d = calculate_piotroski_advanced(s)
 
         current_year = datetime.now().year
         hist = s.history(start=f"{current_year}-01-01")
-        
-        perf_1j, perf_1m, perf_ytd = 0, 0, 0
-        
+
+        perf_1j = perf_1m = perf_ytd = 0
         if len(hist) >= 2:
-            c_actuel = p
-            c_veille = hist['Close'].iloc[-2]
-            perf_1j = ((c_actuel - c_veille) / c_veille) * 100
+            c_veille      = hist['Close'].iloc[-2]
             c_debut_annee = hist['Close'].iloc[0]
-            perf_ytd = ((c_actuel - c_debut_annee) / c_debut_annee) * 100
+            perf_1j  = ((p - c_veille) / c_veille) * 100
+            perf_ytd = ((p - c_debut_annee) / c_debut_annee) * 100
             if len(hist) >= 20:
-                c_debut_mois = hist['Close'].iloc[-20]
-                perf_1m = ((c_actuel - c_debut_mois) / c_debut_mois) * 100
+                perf_1m = ((p - hist['Close'].iloc[-20]) / hist['Close'].iloc[-20]) * 100
             else:
                 perf_1m = perf_ytd
 
-        # --- CAGR 3 ans et 5 ans ---
         def calc_cagr(ticker_obj, years):
             try:
                 h = ticker_obj.history(period=f"{years}y")
                 if len(h) < 20: return None
                 c_start = h['Close'].iloc[0]
-                c_end = h['Close'].iloc[-1]
+                c_end   = h['Close'].iloc[-1]
                 if c_start <= 0: return None
                 return ((c_end / c_start) ** (1 / years) - 1) * 100
-            except: return None
+            except:
+                return None
 
         cagr_3y = calc_cagr(s, 3)
         cagr_5y = calc_cagr(s, 5)
@@ -488,33 +485,30 @@ def fetch_stock_data(ticker_str):
 
         curr_raw = info.get('currency', 'EUR')
         sym = "$" if curr_raw == "USD" else "£" if curr_raw == "GBP" else "€"
-        
-        div_date = info.get("exDividendDate")
+
+        div_date     = info.get("exDividendDate")
         div_date_str = datetime.fromtimestamp(div_date).strftime('%d/%m/%Y') if div_date else "N/A"
 
-        # --- Indicateurs fondamentaux ---
         trailing_eps = info.get("trailingEps", 0) or 0
-        trailing_pe  = info.get("trailingPE", 0) or 0
+        trailing_pe  = info.get("trailingPE",  0) or 0
 
-        # PEG actuel = PER actuel / croissance BNA (trailingEps growth)
-        eps_growth = info.get("earningsGrowth")  # taux annuel (ex: 0.15 = 15%)
+        eps_growth = info.get("earningsGrowth")
         if eps_growth and eps_growth != 0 and trailing_pe:
             peg_actuel = trailing_pe / (eps_growth * 100)
         else:
             peg_actuel = None
 
-        # PEG forward = PER forward / croissance BNA estimée
         fwd_eps_growth = info.get("earningsQuarterlyGrowth") or info.get("revenueGrowth")
         if fwd_eps_growth and fwd_eps_growth != 0 and pf:
             peg_forward = pf / (fwd_eps_growth * 100)
         else:
             peg_forward = None
 
-        roa = info.get("returnOnAssets")       # ex: 0.12 → 12%
-        roe = info.get("returnOnEquity")        # ex: 0.25 → 25%
-        marge_nette = info.get("profitMargins") # ex: 0.18 → 18%
-        dette_equity = info.get("debtToEquity") # ex: 45.3 → 45.3%
-        beta = info.get("beta")
+        roa         = info.get("returnOnAssets")
+        roe         = info.get("returnOnEquity")
+        marge_nette = info.get("profitMargins")
+        dette_equity = info.get("debtToEquity")
+        beta        = info.get("beta")
 
         def pct_fmt(v):
             if v is None or (isinstance(v, float) and pd.isna(v)): return "N/A"
@@ -526,40 +520,39 @@ def fetch_stock_data(ticker_str):
 
         # --- Croissance EBITDA ---
         try:
-            ebitda_curr = stock.financials.loc['EBITDA'].iloc[0] if 'EBITDA' in stock.financials.index else None
-            ebitda_prev = stock.financials.loc['EBITDA'].iloc[1] if ('EBITDA' in stock.financials.index and len(stock.financials.columns) > 1) else None
-            if ebitda_curr and ebitda_prev and ebitda_prev != 0 and not pd.isna(ebitda_curr) and not pd.isna(ebitda_prev):
+            ebitda_curr = s.financials.loc['EBITDA'].iloc[0] if 'EBITDA' in s.financials.index else None
+            ebitda_prev = s.financials.loc['EBITDA'].iloc[1] if ('EBITDA' in s.financials.index and len(s.financials.columns) > 1) else None
+            if (ebitda_curr is not None and ebitda_prev is not None
+                    and ebitda_prev != 0
+                    and not pd.isna(ebitda_curr) and not pd.isna(ebitda_prev)):
                 ebitda_growth = ((ebitda_curr - ebitda_prev) / abs(ebitda_prev)) * 100
             else:
                 ebitda_growth = None
         except Exception:
             ebitda_growth = None
 
-        # --- P/FCF (Prix / Free Cash Flow par action) ---
+        # --- P/FCF ---
         try:
-            fcf_total = stock.cashflow.loc['Free Cash Flow'].dropna().iloc[0] if 'Free Cash Flow' in stock.cashflow.index else None
-            shares = info.get('sharesOutstanding', 0)
-            if fcf_total and shares and shares > 0 and not pd.isna(fcf_total):
-                fcf_per_share = fcf_total / shares
+            fcf_total = s.cashflow.loc['Free Cash Flow'].dropna().iloc[0] if 'Free Cash Flow' in s.cashflow.index else None
+            if fcf_total and sh and sh > 0 and not pd.isna(fcf_total):
+                fcf_per_share = fcf_total / sh
                 p_fcf = p / fcf_per_share if fcf_per_share > 0 else None
             else:
                 p_fcf = None
         except Exception:
             p_fcf = None
 
-        # --- Formatage ---
         def fmt_growth(v):
-            if v is None or (isinstance(v, float) and pd.isna(v)):
-                return "N/A"
+            if v is None or (isinstance(v, float) and pd.isna(v)): return "N/A"
             return f"{v:+.1f}%"
 
         def fmt_ratio(v, decimals=1):
-            if v is None or (isinstance(v, float) and pd.isna(v)):
-                return "N/A"
+            if v is None or (isinstance(v, float) and pd.isna(v)): return "N/A"
             return f"{v:.{decimals}f}x"
 
         return {
-            "Ticker": ticker_str, "Nom": info.get("longName", ticker_str),
+            "Ticker": ticker_str,
+            "Nom": info.get("longName", ticker_str),
             "Secteur": SECTORS_FR.get(info.get("sector"), info.get("sector")),
             "Prix Actuel": p,
             "BNA Actuel": trailing_eps,
@@ -571,40 +564,56 @@ def fetch_stock_data(ticker_str):
             "Marge Nette": pct_fmt(marge_nette),
             "Dette/Equity": num_fmt(dette_equity) if dette_equity else "N/A",
             "Beta": num_fmt(beta) if beta else "N/A",
+            "Croissance EBITDA": fmt_growth(ebitda_growth),   # NOUVEAU
+            "P/FCF": fmt_ratio(p_fcf),                         # NOUVEAU
             "CAGR 3 ans": fmt_pct(cagr_3y),
             "CAGR 5 ans": fmt_pct(cagr_5y),
             "Chg 1J": fmt_p(perf_1j),
             "Chg YTD": fmt_p(perf_ytd),
             "Chg 1M": fmt_p(perf_1m),
             "currency": sym,
-            "Croissance EBITDA": fmt_growth(ebitda_growth),
-            "P/FCF": fmt_ratio(p_fcf),
-            "BNA Forward": ef, "PER Forward": pf, "Nb Analystes": info.get("numberOfAnalystOpinions", 0),
-            "Entrée BNA -15%": vb * 0.85, "Entrée FCF -15%": vf * 0.85, "Entrée Analystes -15%": tm * 0.85,
-            "Entrée Synthèse (-15%)": avg * 0.85, "Santé (Piotroski)": p_s, "p_details": p_d,
-            "Dividende (€/$)": info.get("dividendRate", 0), "Rendement %": round((info.get("dividendRate", 0)/p*100), 2) if info.get("dividendRate") else 0,
-            "Date Détachement": div_date_str, "Avis Analystes": RECO_FR.get(info.get("recommendationKey"), "N/A"),
-            "full_data": {"val_bna": vb, "val_fcf": vf, "target_mean": tm, "fair_avg": avg, "currency": info.get("currency", "EUR"), "eps_fwd": ef, "per_fwd": pf, "fcf_ps": fcf_raw/sh if sh>0 else 0, "num_analysts": info.get("numberOfAnalystOpinions", 0)}
+            "BNA Forward": ef,
+            "PER Forward": pf,
+            "Nb Analystes": info.get("numberOfAnalystOpinions", 0),
+            "Entrée BNA -15%": vb * 0.85,
+            "Entrée FCF -15%": vf * 0.85,
+            "Entrée Analystes -15%": tm * 0.85,
+            "Entrée Synthèse (-15%)": avg * 0.85,
+            "Santé (Piotroski)": p_s,
+            "Dividende (€/$)": info.get("dividendRate", 0),
+            "Rendement %": round((info.get("dividendRate", 0) / p * 100), 2) if info.get("dividendRate") else 0,
+            "Date Détachement": div_date_str,
+            "Avis Analystes": RECO_FR.get(info.get("recommendationKey"), "N/A"),
+            # Colonnes internes (non affichées dans le tableau)
+            "p_details": p_d,
+            "full_data": {
+                "val_bna": vb, "val_fcf": vf, "target_mean": tm, "fair_avg": avg,
+                "currency": info.get("currency", "EUR"),
+                "eps_fwd": ef, "per_fwd": pf,
+                "fcf_ps": fcf_raw / sh if sh > 0 else 0,
+                "num_analysts": info.get("numberOfAnalystOpinions", 0)
+            }
         }
-    except: return None
+    except:
+        return None
 
 
-# --- GESTION LISTES & COLONNES ---
+# =======================================================================
+# GESTION LISTES & COLONNES
+# =======================================================================
+
 @st.cache_data(ttl=3600)
 def get_all_watchlists():
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
-        df = conn.read(worksheet="Watchlists")
-        
+        df   = conn.read(worksheet="Watchlists")
         watchlists_dict = {}
         if not df.empty and 'list_name' in df.columns:
             col_ticker = 'tickers' if 'tickers' in df.columns else 'Ticker'
-            
             for name in df['list_name'].dropna().unique():
-                t_data = df[df['list_name'] == name][col_ticker].iloc[0]
+                t_data      = df[df['list_name'] == name][col_ticker].iloc[0]
                 ticker_list = [t.strip().upper() for t in str(t_data).split(',') if t.strip()]
                 watchlists_dict[name] = ticker_list
-            
             return watchlists_dict
         return {"Actions_EU": ["AAPL"]}
     except:
@@ -612,38 +621,39 @@ def get_all_watchlists():
 
 
 def delete_watchlist_gsheets(watchlist_name):
-    conn = st.connection("gsheets", type=GSheetsConnection)
-    df = conn.read(worksheet="Watchlists")
+    conn       = st.connection("gsheets", type=GSheetsConnection)
+    df         = conn.read(worksheet="Watchlists")
     df_updated = df[df['Wallet_Name'] != watchlist_name]
     conn.update(worksheet="Watchlists", data=df_updated)
     st.cache_data.clear()
 
+
 def load_watchlist_gsheets(list_name):
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
-        df = conn.read(worksheet="Watchlists")
-        res = df[df['list_name'] == list_name]
+        df   = conn.read(worksheet="Watchlists")
+        res  = df[df['list_name'] == list_name]
         if not res.empty:
             return res.iloc[0]['tickers']
         return ""
-    except Exception as e:
+    except Exception:
         return ""
+
 
 def save_watchlist_gsheets(list_name, tickers_text):
     try:
         conn = st.connection("gsheets", type=GSheetsConnection)
-        df = conn.read(worksheet="Watchlists")
-        
+        df   = conn.read(worksheet="Watchlists")
         if list_name in df['list_name'].values:
             df.loc[df['list_name'] == list_name, 'tickers'] = tickers_text
         else:
             new_row = pd.DataFrame({'list_name': [list_name], 'tickers': [tickers_text]})
             df = pd.concat([df, new_row], ignore_index=True)
-            
         conn.update(worksheet="Watchlists", data=df)
         st.success(f"✅ Liste '{list_name}' synchronisée !")
     except Exception as e:
         st.error(f"Erreur de sauvegarde : {e}")
+
 
 def on_list_change():
     st.cache_data.clear()
@@ -652,23 +662,22 @@ def on_list_change():
     st.cache_data.clear()
 
 
-# --- INTERFACE ---
+# =======================================================================
+# INTERFACE PRINCIPALE
+# =======================================================================
+
 st.set_page_config(page_title="Analyseur Pro+", layout="wide")
-st.markdown(
-    """
+st.markdown("""
     <style>
-    .block-container {
-        padding-top: 3.5rem !important;
-    }
+    .block-container { padding-top: 3.5rem !important; }
     [data-testid="stSidebarNav"] {padding-top: 0rem;}
     [data-testid="stSidebarContent"] > div:first-child {padding-top: 1rem;}
     [data-testid='stTable'] {font-size: 13px;}
     .stVerticalBlock {gap: 0.5rem;}
     </style>
-    """,
-    unsafe_allow_html=True
-)
+""", unsafe_allow_html=True)
 
+# --- SIDEBAR ---
 with st.sidebar:
     if st.button("🔄 Forcer l'actualisation", width="stretch"):
         st.cache_data.clear()
@@ -680,11 +689,11 @@ with st.sidebar:
     if sq:
         sug = search_ticker(sq)
         if sug:
-            opt = [x['label'] for x in sug]
+            opt     = [x['label'] for x in sug]
             sel_opt = st.selectbox("Résultats :", opt)
-            tk_add = sug[opt.index(sel_opt)]['symbol']
+            tk_add  = sug[opt.index(sel_opt)]['symbol']
             if st.button(f"➕ Ajouter {tk_add}"):
-                cur_tk = load_watchlist_gsheets(st.session_state.get('sel_list', 'Portefeuille Principal'))
+                cur_tk          = load_watchlist_gsheets(st.session_state.get('sel_list', 'Portefeuille Principal'))
                 new_tickers_list = cur_tk + f", {tk_add}"
                 save_watchlist_gsheets(st.session_state.get('sel_list', 'Portefeuille Principal'), new_tickers_list)
                 st.session_state["ticker_editor"] = new_tickers_list
@@ -692,15 +701,9 @@ with st.sidebar:
                 st.rerun()
 
     st.divider()
-    
     st.header("📂 Portefeuilles")
-    lists = get_all_watchlists()
-    sel_list = st.selectbox(
-        "Liste active :", 
-        options=list(lists.keys()), 
-        key='sel_list', 
-        on_change=on_list_change
-    )
+    lists    = get_all_watchlists()
+    sel_list = st.selectbox("Liste active :", options=list(lists.keys()), key='sel_list', on_change=on_list_change)
 
     col1, col2 = st.columns(2)
     with col1:
@@ -716,49 +719,38 @@ with st.sidebar:
                 save_watchlist_gsheets(new_name, "AAPL")
                 st.success(f"'{new_name}' Liste créée !")
                 st.cache_data.clear()
-                import time
                 time.sleep(0.5)
                 st.rerun()
             else:
                 st.error("Nom vide !")
 
     if show_del:
-        st.warning(f"⚠️ Action irréversible")
+        st.warning("⚠️ Action irréversible")
         list_to_del = st.selectbox("Choisir la liste à supprimer :", lists, key="del_select_box")
-        
         if st.button(f"Confirmer la suppression de {list_to_del}", type="primary", key="btn_confirm_del"):
             if len(lists) > 1:
                 try:
-                    conn = st.connection("gsheets", type=GSheetsConnection)
-                    df_all = conn.read(worksheet="Watchlists")
+                    conn       = st.connection("gsheets", type=GSheetsConnection)
+                    df_all     = conn.read(worksheet="Watchlists")
                     df_updated = df_all[df_all['list_name'] != list_to_del]
                     conn.update(worksheet="Watchlists", data=df_updated)
                     st.success(f"🔥 Liste '{list_to_del}' supprimée avec succès !")
                     st.cache_data.clear()
-                    import time
                     time.sleep(0.5)
                     st.rerun()
-                    
                 except Exception as e:
                     st.error(f"Erreur lors de la suppression : {e}")
             else:
                 st.error("🚫 Impossible de supprimer la dernière liste !")
 
-    st.sidebar.markdown("<br>", unsafe_allow_html=True) 
+    st.sidebar.markdown("<br>", unsafe_allow_html=True)
 
     col_news1, col_news2 = st.sidebar.columns([0.5, 4], vertical_alignment="center")
-
     with col_news1:
-        show_news_portfolio = st.checkbox(
-            "Actualités", 
-            value=False, 
-            key="chk_news_port",
-            label_visibility="collapsed"
-        )
-
+        show_news_portfolio = st.checkbox("Actualités", value=False, key="chk_news_port", label_visibility="collapsed")
     with col_news2:
         st.markdown("📰 **Actualités**", help="Afficher les Actualités du portefeuille")
-    
+
     st.divider()
 
     current_content = load_watchlist_gsheets(sel_list)
@@ -766,19 +758,29 @@ with st.sidebar:
         st.session_state["ticker_editor"] = current_content
 
     tickers_input = st.text_area(
-        "Éditer les tickers :", 
-        value=current_content, 
-        height=100, 
+        "Éditer les tickers :",
+        value=current_content,
+        height=100,
         key="ticker_editor",
         on_change=update_tickers_callback
     ).upper()
-    st.divider()   
-    cols_all = ["Nom", "Secteur", "Prix Actuel", "BNA Actuel", "PER Actuel", "PEG Actuel", "PEG Forward",
-                "BNA Forward", "PER Forward", "ROA", "ROE", "Marge Nette", "Dette/Equity", "Beta",
-                "CAGR 3 ans", "CAGR 5 ans",
-                "Entrée BNA -15%", "Entrée FCF -15%", "Entrée Analystes -15%", "Entrée Synthèse (-15%)", 
-                "Santé (Piotroski)", "Chg 1J", "Chg 1M", "Chg YTD", "Nb Analystes", "Dividende (€/$)", "Rendement %", "Date Détachement", "Avis Analystes"]
+    st.divider()
 
+    # Colonnes disponibles (sans les colonnes internes)
+    cols_all = [
+        "Nom", "Secteur", "Prix Actuel",
+        "BNA Actuel", "PER Actuel", "PEG Actuel", "PEG Forward",
+        "BNA Forward", "PER Forward",
+        "ROA", "ROE", "Marge Nette", "Dette/Equity", "Beta",
+        "Croissance EBITDA", "P/FCF",
+        "CAGR 3 ans", "CAGR 5 ans",
+        "Entrée BNA -15%", "Entrée FCF -15%", "Entrée Analystes -15%", "Entrée Synthèse (-15%)",
+        "Santé (Piotroski)",
+        "Chg 1J", "Chg 1M", "Chg YTD",
+        "Nb Analystes", "Dividende (€/$)", "Rendement %", "Date Détachement", "Avis Analystes"
+    ]
+
+# --- TITRE ---
 st.title(f"📈 {sel_list}")
 t_list = [t.strip().upper() for t in tickers_input.replace('\r', '').replace('\n', ',').split(',') if t.strip()]
 
@@ -788,90 +790,76 @@ def get_column_config():
     return conn.read(worksheet="Choix_colonnes")
 
 
+# =======================================================================
+# CHARGEMENT DES DONNÉES
+# =======================================================================
+
 if t_list:
     status_container = st.empty()
     with status_container.container():
         with st.status(f"⏳ Analyse de {len(t_list)} actions en cours...", expanded=True) as status:
             st.write("Connexion aux serveurs financiers...")
-            
             with ThreadPoolExecutor(max_workers=20) as executor:
                 results = list(executor.map(fetch_stock_data, t_list))
-            
             st.write("Finalisation des calculs...")
             status.update(label="✅ Données prêtes !", state="complete", expanded=False)
             time.sleep(0.5)
 
     status_container.empty()
-
     data_res = [r for r in results if r is not None]
-    
+
     if data_res:
         df = pd.DataFrame(data_res)
-        df['Date Détachement'] = pd.to_datetime(df['Date Détachement'], errors='coerce', dayfirst=True)    
+        df['Date Détachement'] = pd.to_datetime(df['Date Détachement'], errors='coerce', dayfirst=True)
         ticker_to_name = dict(zip(df['Ticker'], df['Nom']))
 
+        # Colonnes internes à masquer du tableau
+        COLS_INTERNES = {'p_details', 'full_data'}
+
         try:
-            df_conf = get_column_config()
+            df_conf      = get_column_config()
             liste_profils = sorted(df_conf['Profil'].unique().tolist())
             profil_choisi = st.sidebar.selectbox("📋 Vue de tableau", options=liste_profils)
-            config_active = df_conf[df_conf['Profil'] == profil_choisi]            
-            cols_base = config_active[config_active['Afficher'] == True]['Nom_Colonne'].tolist()
-            cols_figees_base = config_active[config_active['Figer'] == True]['Nom_Colonne'].tolist()
-
+            config_active = df_conf[df_conf['Profil'] == profil_choisi]
+            cols_base         = config_active[config_active['Afficher'] == True]['Nom_Colonne'].tolist()
+            cols_figees_base  = config_active[config_active['Figer'] == True]['Nom_Colonne'].tolist()
         except Exception as e:
             st.error(f"Erreur configuration colonnes : {e}")
             cols_base, cols_figees_base = ["Ticker", "Nom"], ["Ticker"]
 
         selection_finale = []
-        selection_figee = []
-        config_colonnes = {col: st.column_config.Column(pinned=True) for col in selection_figee}
+        selection_figee  = []
+        config_colonnes  = {col: st.column_config.Column(pinned=True) for col in selection_figee}
 
-    
+        # =======================================================================
+        # STYLE DU TABLEAU
+        # =======================================================================
+
         def style_df(df):
             styles = pd.DataFrame('', index=df.index, columns=df.columns)
-            
+
             if 'Prix Actuel' in df.columns:
                 p_actuel = df['Prix Actuel']
-                
-                # Entrées individuelles (Vert si > Prix)
+
                 for col in ['Entrée FCF -15%', 'Entrée BNA -15%', 'Entrée Analystes -15%']:
                     if col in df.columns:
                         mask = df[col].fillna(0) > p_actuel
                         styles.loc[mask, col] = 'background-color: #d4edda; color: #155724;'
 
-                # -------------------------------------------------------
-                # ENTRÉE SYNTHÈSE : Vert SEULEMENT si la moyenne
-                # (BNA -15% + FCF -15%) / 2  est INFÉRIEURE au Prix Actuel
-                # = les deux modèles fondamentaux estiment un point d'entrée
-                #   sous le cours actuel → signal d'achat cohérent
-                # -------------------------------------------------------
                 if 'Entrée Synthèse (-15%)' in df.columns:
-                    # Style de base : bordure encadrante + gras
                     styles['Entrée Synthèse (-15%)'] = (
-                        'border-left: 2px solid #555; '
-                        'border-right: 2px solid #555; '
-                        'font-weight: bold;'
+                        'border-left: 2px solid #555; border-right: 2px solid #555; font-weight: bold;'
                     )
-
                     col_bna = 'Entrée BNA -15%'
                     col_fcf = 'Entrée FCF -15%'
-
                     if col_bna in df.columns and col_fcf in df.columns:
-                        # Moyenne des deux points d'entrée modèles
                         moyenne_entrees = (df[col_bna].fillna(0) + df[col_fcf].fillna(0)) / 2
-                        # Signal achat = moyenne < prix actuel
                         mask_synth = moyenne_entrees < p_actuel
-                        styles.loc[mask_synth, 'Entrée Synthèse (-15%)'] += (
-                            'background-color: #28a745; color: white;'
-                        )
+                        styles.loc[mask_synth, 'Entrée Synthèse (-15%)'] += 'background-color: #28a745; color: white;'
                     else:
-                        # Fallback si une colonne source manque
                         mask_synth = df['Entrée Synthèse (-15%)'] > p_actuel
-                        styles.loc[mask_synth, 'Entrée Synthèse (-15%)'] += (
-                            'background-color: #28a745; color: white;'
-                        )
+                        styles.loc[mask_synth, 'Entrée Synthèse (-15%)'] += 'background-color: #28a745; color: white;'
 
-            # --- Coloration PEG (< 1 = sous-évalué vert, > 2 = rouge) ---
             for col_peg in ['PEG Actuel', 'PEG Forward']:
                 if col_peg in df.columns:
                     for i, v in df[col_peg].items():
@@ -881,9 +869,9 @@ if t_list:
                                 styles.loc[i, col_peg] = 'background-color: #d4edda; color: #155724; font-weight: bold;'
                             elif val > 2:
                                 styles.loc[i, col_peg] = 'color: #dc3545; font-weight: bold;'
-                        except: pass
+                        except:
+                            pass
 
-            # --- Coloration ROE / ROA (> 15% vert, < 0 rouge) ---
             for col_r in ['ROE', 'ROA']:
                 if col_r in df.columns:
                     for i, v in df[col_r].items():
@@ -893,9 +881,9 @@ if t_list:
                                 styles.loc[i, col_r] = 'color: #28a745; font-weight: bold;'
                             elif val < 0:
                                 styles.loc[i, col_r] = 'color: #dc3545; font-weight: bold;'
-                        except: pass
+                        except:
+                            pass
 
-            # --- Coloration Marge Nette (> 20% vert, < 5% rouge) ---
             if 'Marge Nette' in df.columns:
                 for i, v in df['Marge Nette'].items():
                     try:
@@ -904,9 +892,9 @@ if t_list:
                             styles.loc[i, 'Marge Nette'] = 'color: #28a745; font-weight: bold;'
                         elif val < 5:
                             styles.loc[i, 'Marge Nette'] = 'color: #dc3545;'
-                    except: pass
+                    except:
+                        pass
 
-            # --- Coloration CAGR ---
             for col_cagr in ['CAGR 3 ans', 'CAGR 5 ans']:
                 if col_cagr in df.columns:
                     for i, v in df[col_cagr].items():
@@ -916,31 +904,57 @@ if t_list:
                                 styles.loc[i, col_cagr] = 'color: #28a745; font-weight: bold;'
                             elif val < 0:
                                 styles.loc[i, col_cagr] = 'color: #dc3545; font-weight: bold;'
-                        except: pass
+                        except:
+                            pass
 
-            # Coloration Piotroski
+            # Coloration P/FCF (< 15x vert, > 30x rouge)
+            if 'P/FCF' in df.columns:
+                for i, v in df['P/FCF'].items():
+                    try:
+                        val = float(str(v).replace('x', ''))
+                        if val < 15:
+                            styles.loc[i, 'P/FCF'] = 'color: #28a745; font-weight: bold;'
+                        elif val > 30:
+                            styles.loc[i, 'P/FCF'] = 'color: #dc3545; font-weight: bold;'
+                    except:
+                        pass
+
+            # Coloration Croissance EBITDA (> 10% vert, < 0% rouge)
+            if 'Croissance EBITDA' in df.columns:
+                for i, v in df['Croissance EBITDA'].items():
+                    try:
+                        val = float(str(v).replace('%', '').replace('+', ''))
+                        if val > 10:
+                            styles.loc[i, 'Croissance EBITDA'] = 'color: #28a745; font-weight: bold;'
+                        elif val < 0:
+                            styles.loc[i, 'Croissance EBITDA'] = 'color: #dc3545; font-weight: bold;'
+                    except:
+                        pass
+
             if 'Santé (Piotroski)' in df.columns:
                 for i, v in df['Santé (Piotroski)'].items():
                     try:
                         s = int(str(v).split('/')[0])
-                        if s >= 4: styles.loc[i, 'Santé (Piotroski)'] += 'color: #28a745; font-weight: bold;'
+                        if s >= 4:   styles.loc[i, 'Santé (Piotroski)'] += 'color: #28a745; font-weight: bold;'
                         elif s <= 1: styles.loc[i, 'Santé (Piotroski)'] += 'color: #dc3545; font-weight: bold;'
-                    except: pass
+                    except:
+                        pass
 
-            # Coloration des performances
             for col in ['Chg 1J', 'Chg 1M', 'Chg YTD']:
                 if col in df.columns:
-                    mask_plus = df[col].astype(str).str.contains(r'\+')
+                    mask_plus  = df[col].astype(str).str.contains(r'\+')
                     mask_moins = df[col].astype(str).str.contains('-')
-                    styles.loc[mask_plus, col] += 'color: #28a745; font-weight: bold;'
+                    styles.loc[mask_plus,  col] += 'color: #28a745; font-weight: bold;'
                     styles.loc[mask_moins, col] += 'color: #dc3545; font-weight: bold;'
 
             return styles
 
+        # =======================================================================
+        # AFFICHAGE
+        # =======================================================================
 
         if show_news_portfolio:
             st.subheader(f"📝 Revue de Presse : {sel_list}")
-
             if tickers_input:
                 liste_tickers = [t.strip().upper() for t in tickers_input.split(',') if t.strip()]
                 actualite_module(liste_tickers)
@@ -948,52 +962,48 @@ if t_list:
                 st.info("La liste de tickers est vide.")
         else:
             with st.expander("🛠️ Personnaliser les colonnes affichées"):
-                # Colonnes internes à exclure de l'affichage tableau
-                COLS_INTERNES = {'p_details', 'full_data'}
-
-                # Filtrer toutes_les_cols (utilisé dans le multiselect)
-                toutes_les_cols = [c for c in df.columns.tolist() if c not in COLS_INTERNES]
-
-                # Filtrer cols_base (colonnes par défaut issues de la config GSheets)
+                # Exclure les colonnes internes de l'interface utilisateur
+                toutes_les_cols   = [c for c in df.columns.tolist() if c not in COLS_INTERNES]
                 cols_base_filtrees = [c for c in cols_base if c in toutes_les_cols]
 
-                # Utiliser cols_base_filtrees à la place de cols_base dans le multiselect :
                 selection_finale = st.multiselect(
                     "Colonnes actives :",
                     options=toutes_les_cols,
-                        default=[c for c in cols_base_filtrees if c in toutes_les_cols]
-                        )
-
+                    default=[c for c in cols_base_filtrees if c in toutes_les_cols]
+                )
                 selection_figee = st.multiselect(
                     "Colonnes à figer à gauche :",
                     options=selection_finale,
-                        default=[c for c in cols_figees_base if c in selection_finale]
-                        )
-
+                    default=[c for c in cols_figees_base if c in selection_finale]
+                )
 
             hauteur_dynamique = (len(df) * 35) + 38
             sel = st.dataframe(
-                df[selection_finale].style.apply(style_df, axis=None).format(formatter=lambda x: clean_num(x) if isinstance(x, (int, float)) else x),
+                df[selection_finale].style.apply(style_df, axis=None).format(
+                    formatter=lambda x: clean_num(x) if isinstance(x, (int, float)) else x
+                ),
                 on_select="rerun",
                 selection_mode="single-row",
                 width="stretch",
                 hide_index=True,
                 height=min(hauteur_dynamique, 850),
                 column_config={
-                    "Date Détachement": st.column_config.DateColumn(
-                        "Date Détachement",
-                        format="DD/MM/YYYY",
-                    ),
-                    **config_colonnes 
+                    "Date Détachement": st.column_config.DateColumn("Date Détachement", format="DD/MM/YYYY"),
+                    **{col: st.column_config.Column(pinned=True) for col in selection_figee}
                 },
             )
 
+            # =======================================================================
+            # VUE DÉTAIL (ligne sélectionnée)
+            # =======================================================================
+
             if sel.selection and sel.selection.rows:
-                d = data_res[sel.selection.rows[0]]
+                d  = data_res[sel.selection.rows[0]]
                 fd = d['full_data']
                 st.divider()
-                
+
                 c1, c2 = st.columns([2, 1])
+
                 with c1:
                     st.header(f"🏢 {d['Nom']} ({d['Ticker']})")
                     st.subheader("🏥 Diagnostic Santé Financière")
@@ -1012,40 +1022,40 @@ if t_list:
                             """, unsafe_allow_html=True)
 
                     # ===================================================
-                    # SECTION GRAPHIQUE AVANCÉ AVEC INDICATEURS TECHNIQUES
+                    # GRAPHIQUE
                     # ===================================================
                     st.divider()
                     st.subheader(f"📈 Performance & Volumes")
 
                     try:
-                        s_obj = yf.Ticker(d['Ticker'])
+                        s_obj      = yf.Ticker(d['Ticker'])
                         current_yr = datetime.now().year
 
-                        # --- CONTRÔLES ---
+                        # Contrôles
                         ctrl_col1, ctrl_col2 = st.columns([0.45, 0.55])
                         with ctrl_col1:
                             st.caption("📅 Période")
                             periode_choisie = st.radio(
-                                "Période",                        # ← label non vide (évite "undefined")
+                                "Période",
                                 ["YTD", "1 an", "2 ans", "5 ans", "Max"],
                                 horizontal=True,
                                 key=f"periode_{d['Ticker']}",
-                                label_visibility="collapsed"      # masqué visuellement
+                                label_visibility="collapsed"
                             )
                         with ctrl_col2:
                             st.caption("📊 Indicateur")
                             indicateur_choisi = st.radio(
-                                "Indicateur",                     # ← label non vide
+                                "Indicateur",
                                 ["RSI", "MACD", "Bollinger + MA"],
-                                index=0,                          # ← RSI sélectionné par défaut
+                                index=0,                    # RSI par défaut
                                 horizontal=True,
                                 key=f"indic_{d['Ticker']}",
                                 label_visibility="collapsed"
                             )
 
-                        # --- DÉTERMINATION DE LA DATE DE DÉBUT ---
-                        today = datetime.now()
-                        warmup = 250  # jours pour stabiliser MA200
+                        # Dates
+                        today  = datetime.now()
+                        warmup = 250
                         if periode_choisie == "YTD":
                             date_calcul    = (datetime(current_yr, 1, 1) - timedelta(days=warmup)).strftime('%Y-%m-%d')
                             date_affichage = f"{current_yr}-01-01"
@@ -1058,7 +1068,7 @@ if t_list:
                         elif periode_choisie == "5 ans":
                             date_calcul    = (today - timedelta(days=1825 + warmup)).strftime('%Y-%m-%d')
                             date_affichage = (today - timedelta(days=1825)).strftime('%Y-%m-%d')
-                        else:  # Max
+                        else:
                             date_calcul    = "1985-01-01"
                             date_affichage = "1985-01-01"
 
@@ -1066,32 +1076,28 @@ if t_list:
 
                         if not h_data_large.empty:
 
-                            # ---- CALCUL INDICATEURS ----
+                            # Calcul indicateurs sur historique complet (avec warmup)
                             h_data_large['MA20']  = h_data_large['Close'].rolling(20).mean()
                             h_data_large['MA50']  = h_data_large['Close'].rolling(50).mean()
                             h_data_large['MA100'] = h_data_large['Close'].rolling(100).mean()
                             h_data_large['MA200'] = h_data_large['Close'].rolling(200).mean()
 
-                            # Bollinger ±2σ
                             h_data_large['BB_std']   = h_data_large['Close'].rolling(20).std()
                             h_data_large['BB_upper'] = h_data_large['MA20'] + h_data_large['BB_std'] * 2
                             h_data_large['BB_lower'] = h_data_large['MA20'] - h_data_large['BB_std'] * 2
 
-                            # RSI 14
                             delta_c = h_data_large['Close'].diff()
                             gain_c  = delta_c.clip(lower=0).rolling(14).mean()
                             loss_c  = (-delta_c.clip(upper=0)).rolling(14).mean()
                             rs_c    = gain_c / loss_c.replace(0, float('nan'))
                             h_data_large['RSI'] = 100 - (100 / (1 + rs_c))
 
-                            # MACD (12, 26, 9)
                             ema12 = h_data_large['Close'].ewm(span=12, adjust=False).mean()
                             ema26 = h_data_large['Close'].ewm(span=26, adjust=False).mean()
                             h_data_large['MACD']        = ema12 - ema26
                             h_data_large['MACD_signal'] = h_data_large['MACD'].ewm(span=9, adjust=False).mean()
                             h_data_large['MACD_hist']   = h_data_large['MACD'] - h_data_large['MACD_signal']
 
-                            # PER historique (proxy BNA constant)
                             bna_actuel = d.get('BNA Actuel', 0)
                             if bna_actuel and bna_actuel > 0:
                                 h_data_large['PER_hist'] = h_data_large['Close'] / bna_actuel
@@ -1099,25 +1105,18 @@ if t_list:
                             # Filtre période d'affichage
                             h_data = h_data_large[h_data_large.index >= date_affichage].copy()
 
-                            # Couleurs volumes
                             colors_vol = [
                                 '#28a745' if row['Close'] >= row['Open'] else '#dc3545'
                                 for _, row in h_data.iterrows()
                             ]
 
-                            # ================================================================
-                            # SUBPLOTS : 3 rangées
-                            #   row 1 : Cours (axe DROIT = prix) + Volume (axe GAUCHE)
-                            #   row 2 : Indicateur choisi
-                            #   row 3 : PER historique
-                            # ================================================================
+                            # ---- SUBPLOTS ----
                             fig = make_subplots(
                                 rows=3, cols=1,
                                 shared_xaxes=True,
                                 row_heights=[0.55, 0.25, 0.20],
                                 vertical_spacing=0.03,
-                                # Titres des sous-graphiques (None = pas de titre = pas de "undefined")
-                                subplot_titles=[None, None, None],
+                                subplot_titles=[None, None, None],   # évite le "undefined"
                                 specs=[
                                     [{"secondary_y": True}],
                                     [{"secondary_y": False}],
@@ -1125,44 +1124,43 @@ if t_list:
                                 ]
                             )
 
-                            # ---- RANGÉE 1 : Volume (axe GAUCHE, secondary_y=False) ----
+                            # Row 1 : Volume (axe gauche)
                             fig.add_trace(go.Bar(
                                 x=h_data.index, y=h_data['Volume'],
                                 name="Volume", marker_color=colors_vol, opacity=0.30
                             ), row=1, col=1, secondary_y=False)
 
-                            # ---- RANGÉE 1 : Prix (axe DROIT, secondary_y=True) ----
+                            # Row 1 : Prix (axe droit)
                             fig.add_trace(go.Scatter(
                                 x=h_data.index, y=h_data['Close'],
                                 name="Prix", line=dict(color='#1a73e8', width=2)
                             ), row=1, col=1, secondary_y=True)
 
-                            # MA50 (toujours)
+                            # MA50 toujours visible
                             fig.add_trace(go.Scatter(
                                 x=h_data.index, y=h_data['MA50'],
                                 name="MA50", line=dict(color='orange', dash='dot', width=1.5)
                             ), row=1, col=1, secondary_y=True)
 
-                            # MA100 (si assez de données)
+                            # MA100
                             if h_data['MA100'].notna().sum() > 10:
                                 fig.add_trace(go.Scatter(
                                     x=h_data.index, y=h_data['MA100'],
                                     name="MA100", line=dict(color='#00bcd4', dash='dot', width=1.5)
                                 ), row=1, col=1, secondary_y=True)
 
-                            # MA200 (si assez de données)
+                            # MA200
                             if h_data['MA200'].notna().sum() > 10:
                                 fig.add_trace(go.Scatter(
                                     x=h_data.index, y=h_data['MA200'],
                                     name="MA200", line=dict(color='#e91e63', dash='dot', width=1.5)
                                 ), row=1, col=1, secondary_y=True)
 
-                            # Bollinger sur le graphique cours si mode sélectionné
+                            # Bollinger sur le cours si mode sélectionné
                             if indicateur_choisi == "Bollinger + MA":
                                 fig.add_trace(go.Scatter(
                                     x=h_data.index, y=h_data['BB_upper'],
-                                    name="BB Sup", line=dict(color='rgba(100,100,200,0.5)', width=1),
-                                    fill=None
+                                    name="BB Sup", line=dict(color='rgba(100,100,200,0.5)', width=1), fill=None
                                 ), row=1, col=1, secondary_y=True)
                                 fig.add_trace(go.Scatter(
                                     x=h_data.index, y=h_data['BB_lower'],
@@ -1174,7 +1172,7 @@ if t_list:
                                     name="MA20", line=dict(color='purple', dash='dot', width=1)
                                 ), row=1, col=1, secondary_y=True)
 
-                            # Ligne prix actuel & zone achat — on référence "y2" = secondary_y de row 1
+                            # Lignes prix actuel & zone achat (référencent y2 = secondary_y row 1)
                             prix_actuel = d['Prix Actuel']
                             fig.add_shape(
                                 type="line", xref="paper", x0=0, x1=1,
@@ -1198,7 +1196,7 @@ if t_list:
                                 font=dict(color="#28a745", size=10)
                             )
 
-                            # ---- RANGÉE 2 : Indicateur choisi ----
+                            # ---- Row 2 : Indicateur ----
                             if indicateur_choisi == "RSI":
                                 fig.add_trace(go.Scatter(
                                     x=h_data.index, y=h_data['RSI'],
@@ -1207,9 +1205,9 @@ if t_list:
                                 fig.add_hrect(y0=70, y1=100, fillcolor="rgba(220,53,69,0.08)",  line_width=0, row=2, col=1)
                                 fig.add_hrect(y0=0,  y1=30,  fillcolor="rgba(40,167,69,0.08)",  line_width=0, row=2, col=1)
                                 fig.add_hline(y=70, line_color="rgba(220,53,69,0.5)", line_dash="dot",
-                                            annotation_text="Surachat 70", annotation_position="right", row=2, col=1)
+                                              annotation_text="Surachat 70", annotation_position="right", row=2, col=1)
                                 fig.add_hline(y=30, line_color="rgba(40,167,69,0.5)", line_dash="dot",
-                                            annotation_text="Survente 30", annotation_position="right", row=2, col=1)
+                                              annotation_text="Survente 30", annotation_position="right", row=2, col=1)
                                 fig.update_yaxes(range=[0, 100], title_text="RSI", row=2, col=1)
 
                             elif indicateur_choisi == "MACD":
@@ -1242,17 +1240,13 @@ if t_list:
                                 fig.add_hrect(y0=80,  y1=130, fillcolor="rgba(220,53,69,0.08)",  line_width=0, row=2, col=1)
                                 fig.add_hrect(y0=-30, y1=20,  fillcolor="rgba(40,167,69,0.08)",  line_width=0, row=2, col=1)
                                 fig.add_hline(y=80, line_color="rgba(220,53,69,0.4)", line_dash="dot",
-                                            annotation_text="Haut BB", annotation_position="right", row=2, col=1)
+                                              annotation_text="Haut BB", annotation_position="right", row=2, col=1)
                                 fig.add_hline(y=20, line_color="rgba(40,167,69,0.4)", line_dash="dot",
-                                            annotation_text="Bas BB", annotation_position="right", row=2, col=1)
+                                              annotation_text="Bas BB", annotation_position="right", row=2, col=1)
                                 fig.update_yaxes(title_text="%B", row=2, col=1)
 
-                            # ---- RANGÉE 3 : PER historique ----
+                            # ---- Row 3 : PER historique ----
                             if 'PER_hist' in h_data.columns and h_data['PER_hist'].notna().sum() > 5:
-                                per_colors = [
-                                    '#dc3545' if v > 30 else '#28a745' if v < 15 else '#1a73e8'
-                                    for v in h_data['PER_hist'].fillna(0)
-                                ]
                                 fig.add_trace(go.Scatter(
                                     x=h_data.index, y=h_data['PER_hist'],
                                     name="PER historique",
@@ -1260,9 +1254,9 @@ if t_list:
                                     fill='tozeroy', fillcolor='rgba(255,152,0,0.08)'
                                 ), row=3, col=1)
                                 for per_ref, per_col, per_lbl in [
-                                    (15, "rgba(40,167,69,0.6)",  "PER 15"),
+                                    (15, "rgba(40,167,69,0.6)",   "PER 15"),
                                     (20, "rgba(100,100,200,0.5)", "PER 20"),
-                                    (30, "rgba(220,53,69,0.6)",  "PER 30"),
+                                    (30, "rgba(220,53,69,0.6)",   "PER 30"),
                                 ]:
                                     fig.add_hline(
                                         y=per_ref, line_color=per_col, line_dash="dot",
@@ -1277,17 +1271,17 @@ if t_list:
                                     showarrow=False, font=dict(color="gray", size=10)
                                 )
 
-                            # ---- MISE EN FORME GLOBALE ----
+                            # ---- Layout global ----
                             fig.update_layout(
-                                # Nom de l'action comme titre principal — remplace le subtitle vide
+                                # Nom de l'action comme titre — remplace le subtitle vide "undefined"
                                 title=dict(
                                     text=f"<b>{d['Nom']}</b> ({d['Ticker']})",
-                                    font=dict(size=14, color="#444"),
+                                    font=dict(size=13, color="#555"),
                                     x=0,
                                     pad=dict(b=0)
                                 ),
                                 height=700,
-                                margin=dict(l=10, r=70, t=35, b=10),   # t=35 pour laisser place au titre
+                                margin=dict(l=10, r=70, t=35, b=10),
                                 hovermode="x unified",
                                 template="plotly_white",
                                 legend=dict(
@@ -1298,21 +1292,19 @@ if t_list:
                                 )
                             )
 
-                            # Axe GAUCHE row 1 = Volume
+                            # Axe gauche row 1 = Volume
                             fig.update_yaxes(
                                 title_text="Volume",
                                 secondary_y=False, row=1, col=1,
                                 showgrid=False, fixedrange=False,
-                                tickformat=".2s",
-                                side="left"
+                                tickformat=".2s", side="left"
                             )
-                            # Axe DROIT row 1 = Prix
+                            # Axe droit row 1 = Prix
                             fig.update_yaxes(
                                 title_text="Prix",
                                 secondary_y=True, row=1, col=1,
                                 showgrid=True, gridcolor='rgba(200,200,200,0.4)',
-                                fixedrange=False,
-                                side="right"
+                                fixedrange=False, side="right"
                             )
                             fig.update_xaxes(showgrid=False)
 
@@ -1327,10 +1319,9 @@ if t_list:
                                     'displaylogo': False
                                 }
                             )
-
-
                         else:
                             st.info("Données historiques non disponibles.")
+
                     except Exception as e:
                         st.error(f"Erreur lors du chargement du graphique : {e}")
 
@@ -1338,8 +1329,8 @@ if t_list:
                     st.subheader("🏆 Modèles de Valorisation")
                     v_configs = [
                         ("1️⃣ Modèle BNA (Forward)", fd['val_bna'], f"BNA Fwd ({clean_num(fd['eps_fwd'])}) × PER Fwd ({fd['per_fwd']})"),
-                        ("2️⃣ Modèle FCF (Moyen)", fd['val_fcf'], f"(FCF/Action {clean_num(fd['fcf_ps'])}) × 1.05 × PER Fwd"),
-                        ("3️⃣ Analystes", fd['target_mean'], f"Moyenne de {fd['num_analysts']} opinions")
+                        ("2️⃣ Modèle FCF (Moyen)",   fd['val_fcf'], f"(FCF/Action {clean_num(fd['fcf_ps'])}) × 1.05 × PER Fwd"),
+                        ("3️⃣ Analystes",             fd['target_mean'], f"Moyenne de {fd['num_analysts']} opinions")
                     ]
                     for title, val, formula in v_configs:
                         if val > 0:
@@ -1347,80 +1338,70 @@ if t_list:
                                 st.caption(f"Calcul : {formula}")
                                 m1, m2, m3, m4 = st.columns(4)
                                 m1.metric("Juste Prix", clean_num(val))
-                                m2.metric("-10%", clean_num(val*0.9))
-                                m3.metric("-12%", clean_num(val*0.88))
-                                m4.metric("-15%", clean_num(val*0.85))
+                                m2.metric("-10%", clean_num(val * 0.9))
+                                m3.metric("-12%", clean_num(val * 0.88))
+                                m4.metric("-15%", clean_num(val * 0.85))
 
                 with c2:
                     st.metric("Prix Actuel", f"{clean_num(d['Prix Actuel'])} {fd['currency']}")
-                    st.markdown(f"<div style='background:#28a745; color:white; padding:25px; border-radius:15px; text-align:center;'><small>ENTRÉE CONSEILLÉE (-15%)</small><br/><span style='font-size:36px; font-weight:bold;'>{clean_num(fd['fair_avg']*0.85)}</span></div>", unsafe_allow_html=True)
+                    st.markdown(
+                        f"<div style='background:#28a745; color:white; padding:25px; border-radius:15px; text-align:center;'>"
+                        f"<small>ENTRÉE CONSEILLÉE (-15%)</small><br/>"
+                        f"<span style='font-size:36px; font-weight:bold;'>{clean_num(fd['fair_avg']*0.85)}</span></div>",
+                        unsafe_allow_html=True
+                    )
                     st.divider()
                     st.write(f"**Dividende :** {clean_num(d['Dividende (€/$)'])} {fd['currency']} ({d['Rendement %']}%)")
                     st.write(f"**Détachement :** {d['Date Détachement']}")
                     st.write(f"**Avis :** {d['Avis Analystes']} | **Secteur :** {d['Secteur']}")
 
-                    mode_fr = False
-                    ticker_clean = "AAPL"
-                    if d and 'Ticker' in d:
-                        ticker_clean = str(d['Ticker']).split('.')[0].upper()
-                        nom_action_vue = d.get('Nom', ticker_clean)
-                    else:
-                        ticker_clean = "AAPL"
-                        nom_action_vue = "Apple"
+                    ticker_clean   = str(d['Ticker']).split('.')[0].upper() if d and 'Ticker' in d else "AAPL"
+                    nom_action_vue = d.get('Nom', ticker_clean)
 
                     st.divider()
                     col_titre, col_switch = st.columns([3, 1])
-                    
                     with col_titre:
                         st.markdown(f"### 📰 Dernières Actualités : {nom_action_vue}")
                     with col_switch:
-                        mode_fr = st.toggle("FR", help="Traduction automatique des titres en français", value=mode_fr)
+                        mode_fr = st.toggle("FR", help="Traduction automatique des titres en français", value=False)
 
                     all_news = get_quick_news(ticker_clean)
 
+                    unique_news = []
+                    titres_vus  = set()
                     if all_news:
                         all_news.sort(key=lambda x: x.get('dt_obj', datetime.now()), reverse=True)
-                        
-                        unique_news = []
-                        titres_vus = set()
-                        
                         for article in all_news:
                             t_brut = article.get('titre', '').lower().strip()
                             if t_brut not in titres_vus:
                                 unique_news.append(article)
                                 titres_vus.add(t_brut)
-                    
-                    query = st.session_state.get("main_search", "")
 
+                    query = st.session_state.get("main_search", "")
                     if query:
                         q = query.lower()
                         unique_news = [
-                            a for a in unique_news 
-                            if q in a.get('titre', '').lower() 
+                            a for a in unique_news
+                            if q in a.get('titre', '').lower()
                             or q in a.get('source', '').lower()
                             or q in a.get('ticker_parent', '').lower()
                         ]
 
                     for article in unique_news[:20]:
-                        lien_reel = article.get('lien', '#') 
-                        source = article.get('source', 'Info').strip('() ')
-                        date = article.get('date', 'Auj.')
-                        badge = article.get('badge', '🌐')
+                        lien_reel  = article.get('lien', '#')
+                        source     = article.get('source', 'Info').strip('() ')
+                        date       = article.get('date', 'Auj.')
+                        badge      = article.get('badge', '🌐')
                         titre_brut = article.get('titre', 'Sans titre')
                         is_seeking = "seekingalpha.com" in lien_reel.lower()
-                        mots_en = {'the', 'stock', 'growth', 'fed', 'market', 'earnings'}
+                        mots_en    = {'the', 'stock', 'growth', 'fed', 'market', 'earnings'}
                         est_anglais = any(w in titre_brut.lower() for w in mots_en) or "seekingalpha" in lien_reel.lower()
-                        
-                        if mode_fr and est_anglais:
-                            titre_affiche = safe_translate(titre_brut)
-                        else:
-                            titre_affiche = titre_brut
 
+                        titre_affiche = safe_translate(titre_brut) if (mode_fr and est_anglais) else titre_brut
                         label = f"{badge} | **{date}** | {titre_affiche}"
 
                         with st.expander(label):
                             st.write(f"**Origine :** {source}")
-                            
                             if is_seeking or not est_anglais:
                                 st.link_button("📖 Lire l'article complet", lien_reel, width="stretch")
                             else:
@@ -1431,6 +1412,5 @@ if t_list:
                                     lien_propre = urllib.parse.quote(lien_reel, safe='')
                                     url_t = f"https://translate.google.com/translate?sl=auto&tl=fr&u={lien_propre}"
                                     st.link_button("🇫🇷 Traduire Page", url_t, type="primary", width="stretch")
-                            
                             if mode_fr and est_anglais:
                                 st.caption(f"Original : {titre_brut}")
