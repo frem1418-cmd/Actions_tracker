@@ -976,62 +976,68 @@ if t_list:
                         s_obj = yf.Ticker(d['Ticker'])
                         current_yr = datetime.now().year
 
-                        # --- CONTRÔLES PÉRIODE + INDICATEUR (même ligne) ---
+                        # --- CONTRÔLES ---
                         ctrl_col1, ctrl_col2 = st.columns([0.45, 0.55])
                         with ctrl_col1:
+                            st.caption("📅 Période")
                             periode_choisie = st.radio(
-                                "Période :",
+                                "Période",                        # ← label non vide (évite "undefined")
                                 ["YTD", "1 an", "2 ans", "5 ans", "Max"],
                                 horizontal=True,
-                                key=f"periode_{d['Ticker']}"
+                                key=f"periode_{d['Ticker']}",
+                                label_visibility="collapsed"      # masqué visuellement
                             )
                         with ctrl_col2:
+                            st.caption("📊 Indicateur")
                             indicateur_choisi = st.radio(
-                                "Indicateur :",
-                                ["Bollinger + MA", "RSI", "MACD"],
+                                "Indicateur",                     # ← label non vide
+                                ["RSI", "MACD", "Bollinger + MA"],
+                                index=0,                          # ← RSI sélectionné par défaut
                                 horizontal=True,
-                                key=f"indic_{d['Ticker']}"
+                                key=f"indic_{d['Ticker']}",
+                                label_visibility="collapsed"
                             )
 
                         # --- DÉTERMINATION DE LA DATE DE DÉBUT ---
                         today = datetime.now()
+                        warmup = 250  # jours pour stabiliser MA200
                         if periode_choisie == "YTD":
-                            # On recule de 60 jours avant le 1er jan pour les indicateurs
-                            date_calcul = (datetime(current_yr, 1, 1) - timedelta(days=60)).strftime('%Y-%m-%d')
+                            date_calcul    = (datetime(current_yr, 1, 1) - timedelta(days=warmup)).strftime('%Y-%m-%d')
                             date_affichage = f"{current_yr}-01-01"
                         elif periode_choisie == "1 an":
-                            date_calcul = (today - timedelta(days=365 + 60)).strftime('%Y-%m-%d')
+                            date_calcul    = (today - timedelta(days=365 + warmup)).strftime('%Y-%m-%d')
                             date_affichage = (today - timedelta(days=365)).strftime('%Y-%m-%d')
                         elif periode_choisie == "2 ans":
-                            date_calcul = (today - timedelta(days=730 + 60)).strftime('%Y-%m-%d')
+                            date_calcul    = (today - timedelta(days=730 + warmup)).strftime('%Y-%m-%d')
                             date_affichage = (today - timedelta(days=730)).strftime('%Y-%m-%d')
                         elif periode_choisie == "5 ans":
-                            date_calcul = (today - timedelta(days=1825 + 60)).strftime('%Y-%m-%d')
+                            date_calcul    = (today - timedelta(days=1825 + warmup)).strftime('%Y-%m-%d')
                             date_affichage = (today - timedelta(days=1825)).strftime('%Y-%m-%d')
                         else:  # Max
-                            date_calcul = "1990-01-01"
-                            date_affichage = "1990-01-01"
+                            date_calcul    = "1985-01-01"
+                            date_affichage = "1985-01-01"
 
                         h_data_large = s_obj.history(start=date_calcul)
 
                         if not h_data_large.empty:
 
-                            # --- CALCUL DES INDICATEURS (sur tout l'historique étendu) ---
-                            h_data_large['MA50']   = h_data_large['Close'].rolling(window=50).mean()
-                            h_data_large['MA20']   = h_data_large['Close'].rolling(window=20).mean()
-                            h_data_large['MA200']  = h_data_large['Close'].rolling(window=200).mean()
+                            # ---- CALCUL INDICATEURS ----
+                            h_data_large['MA20']  = h_data_large['Close'].rolling(20).mean()
+                            h_data_large['MA50']  = h_data_large['Close'].rolling(50).mean()
+                            h_data_large['MA100'] = h_data_large['Close'].rolling(100).mean()
+                            h_data_large['MA200'] = h_data_large['Close'].rolling(200).mean()
 
-                            # Bollinger ±2σ sur MA20
-                            h_data_large['BB_std']   = h_data_large['Close'].rolling(window=20).std()
-                            h_data_large['BB_upper'] = h_data_large['MA20'] + (h_data_large['BB_std'] * 2)
-                            h_data_large['BB_lower'] = h_data_large['MA20'] - (h_data_large['BB_std'] * 2)
+                            # Bollinger ±2σ
+                            h_data_large['BB_std']   = h_data_large['Close'].rolling(20).std()
+                            h_data_large['BB_upper'] = h_data_large['MA20'] + h_data_large['BB_std'] * 2
+                            h_data_large['BB_lower'] = h_data_large['MA20'] - h_data_large['BB_std'] * 2
 
-                            # RSI 14 périodes
-                            delta = h_data_large['Close'].diff()
-                            gain  = delta.clip(lower=0).rolling(14).mean()
-                            loss  = (-delta.clip(upper=0)).rolling(14).mean()
-                            rs    = gain / loss.replace(0, float('nan'))
-                            h_data_large['RSI'] = 100 - (100 / (1 + rs))
+                            # RSI 14
+                            delta_c = h_data_large['Close'].diff()
+                            gain_c  = delta_c.clip(lower=0).rolling(14).mean()
+                            loss_c  = (-delta_c.clip(upper=0)).rolling(14).mean()
+                            rs_c    = gain_c / loss_c.replace(0, float('nan'))
+                            h_data_large['RSI'] = 100 - (100 / (1 + rs_c))
 
                             # MACD (12, 26, 9)
                             ema12 = h_data_large['Close'].ewm(span=12, adjust=False).mean()
@@ -1040,76 +1046,109 @@ if t_list:
                             h_data_large['MACD_signal'] = h_data_large['MACD'].ewm(span=9, adjust=False).mean()
                             h_data_large['MACD_hist']   = h_data_large['MACD'] - h_data_large['MACD_signal']
 
-                            # Filtre sur la période d'affichage choisie
+                            # PER historique (proxy BNA constant)
+                            bna_actuel = d.get('BNA Actuel', 0)
+                            if bna_actuel and bna_actuel > 0:
+                                h_data_large['PER_hist'] = h_data_large['Close'] / bna_actuel
+
+                            # Filtre période d'affichage
                             h_data = h_data_large[h_data_large.index >= date_affichage].copy()
 
                             # Couleurs volumes
-                            colors = [
+                            colors_vol = [
                                 '#28a745' if row['Close'] >= row['Open'] else '#dc3545'
                                 for _, row in h_data.iterrows()
                             ]
 
-                            # --- CONSTRUCTION DU GRAPHIQUE (2 rangées) ---
+                            # ================================================================
+                            # SUBPLOTS : 3 rangées
+                            #   row 1 : Cours (axe DROIT = prix) + Volume (axe GAUCHE)
+                            #   row 2 : Indicateur choisi
+                            #   row 3 : PER historique
+                            # ================================================================
                             fig = make_subplots(
-                                rows=2, cols=1,
+                                rows=3, cols=1,
                                 shared_xaxes=True,
-                                row_heights=[0.65, 0.35],
-                                vertical_spacing=0.04,
-                                specs=[[{"secondary_y": True}], [{"secondary_y": False}]]
+                                row_heights=[0.55, 0.25, 0.20],
+                                vertical_spacing=0.03,
+                                specs=[
+                                    [{"secondary_y": True}],   # prix (droite) + volume (gauche)
+                                    [{"secondary_y": False}],  # indicateur
+                                    [{"secondary_y": False}],  # PER
+                                ]
                             )
 
-                            # ---- RANGÉE 1 : Cours & volumes ----
+                            # ---- RANGÉE 1 : Volume (axe GAUCHE, secondary_y=False) ----
+                            fig.add_trace(go.Bar(
+                                x=h_data.index, y=h_data['Volume'],
+                                name="Volume", marker_color=colors_vol, opacity=0.30
+                            ), row=1, col=1, secondary_y=False)
+
+                            # ---- RANGÉE 1 : Prix (axe DROIT, secondary_y=True) ----
                             fig.add_trace(go.Scatter(
                                 x=h_data.index, y=h_data['Close'],
                                 name="Prix", line=dict(color='#1a73e8', width=2)
-                            ), row=1, col=1, secondary_y=False)
+                            ), row=1, col=1, secondary_y=True)
 
+                            # MA50 (toujours)
                             fig.add_trace(go.Scatter(
                                 x=h_data.index, y=h_data['MA50'],
                                 name="MA50", line=dict(color='orange', dash='dot', width=1.5)
-                            ), row=1, col=1, secondary_y=False)
+                            ), row=1, col=1, secondary_y=True)
 
-                            # MA200 affichée uniquement si on a assez de données
+                            # MA100 (si assez de données)
+                            if h_data['MA100'].notna().sum() > 10:
+                                fig.add_trace(go.Scatter(
+                                    x=h_data.index, y=h_data['MA100'],
+                                    name="MA100", line=dict(color='#00bcd4', dash='dot', width=1.5)
+                                ), row=1, col=1, secondary_y=True)
+
+                            # MA200 (si assez de données)
                             if h_data['MA200'].notna().sum() > 10:
                                 fig.add_trace(go.Scatter(
                                     x=h_data.index, y=h_data['MA200'],
                                     name="MA200", line=dict(color='#e91e63', dash='dot', width=1.5)
-                                ), row=1, col=1, secondary_y=False)
+                                ), row=1, col=1, secondary_y=True)
 
-                            # Bollinger sur cours si mode Bollinger
+                            # Bollinger sur le graphique cours si mode sélectionné
                             if indicateur_choisi == "Bollinger + MA":
                                 fig.add_trace(go.Scatter(
                                     x=h_data.index, y=h_data['BB_upper'],
                                     name="BB Sup", line=dict(color='rgba(100,100,200,0.5)', width=1),
                                     fill=None
-                                ), row=1, col=1, secondary_y=False)
+                                ), row=1, col=1, secondary_y=True)
                                 fig.add_trace(go.Scatter(
                                     x=h_data.index, y=h_data['BB_lower'],
                                     name="BB Inf", line=dict(color='rgba(100,100,200,0.5)', width=1),
                                     fill='tonexty', fillcolor='rgba(100,100,200,0.07)'
-                                ), row=1, col=1, secondary_y=False)
+                                ), row=1, col=1, secondary_y=True)
                                 fig.add_trace(go.Scatter(
                                     x=h_data.index, y=h_data['MA20'],
                                     name="MA20", line=dict(color='purple', dash='dot', width=1)
-                                ), row=1, col=1, secondary_y=False)
+                                ), row=1, col=1, secondary_y=True)
 
-                            # Volumes
-                            fig.add_trace(go.Bar(
-                                x=h_data.index, y=h_data['Volume'],
-                                name="Volume", marker_color=colors, opacity=0.25
-                            ), row=1, col=1, secondary_y=True)
-
-                            # Lignes prix actuel & zone d'achat
+                            # Ligne prix actuel & zone achat — on référence "y2" = secondary_y de row 1
                             prix_actuel = d['Prix Actuel']
-                            fig.add_hline(
-                                y=prix_actuel, line_dash="dash", line_color="gray",
-                                annotation_text=f"Actuel: {prix_actuel:.2f}",
-                                annotation_position="bottom right", row=1, col=1
+                            fig.add_shape(
+                                type="line", xref="paper", x0=0, x1=1,
+                                yref="y2", y0=prix_actuel, y1=prix_actuel,
+                                line=dict(color="gray", dash="dash", width=1.5)
                             )
-                            fig.add_hline(
-                                y=prix_actuel * 0.85, line_dash="dot", line_color="#28a745",
-                                annotation_text="Zone achat (-15%)",
-                                annotation_position="top left", row=1, col=1
+                            fig.add_annotation(
+                                xref="paper", x=1.01, yref="y2",
+                                y=prix_actuel, text=f"  {prix_actuel:.2f}",
+                                showarrow=False, font=dict(color="gray", size=11)
+                            )
+                            fig.add_shape(
+                                type="line", xref="paper", x0=0, x1=1,
+                                yref="y2", y0=prix_actuel * 0.85, y1=prix_actuel * 0.85,
+                                line=dict(color="#28a745", dash="dot", width=1.5)
+                            )
+                            fig.add_annotation(
+                                xref="paper", x=0, yref="y2",
+                                y=prix_actuel * 0.85, text="Zone achat (-15%)  ",
+                                showarrow=False, xanchor="right",
+                                font=dict(color="#28a745", size=10)
                             )
 
                             # ---- RANGÉE 2 : Indicateur choisi ----
@@ -1118,12 +1157,12 @@ if t_list:
                                     x=h_data.index, y=h_data['RSI'],
                                     name="RSI(14)", line=dict(color='#9c27b0', width=2)
                                 ), row=2, col=1)
-                                fig.add_hrect(y0=70, y1=100, fillcolor="rgba(220,53,69,0.08)", line_width=0, row=2, col=1)
+                                fig.add_hrect(y0=70, y1=100, fillcolor="rgba(220,53,69,0.08)",  line_width=0, row=2, col=1)
                                 fig.add_hrect(y0=0,  y1=30,  fillcolor="rgba(40,167,69,0.08)",  line_width=0, row=2, col=1)
                                 fig.add_hline(y=70, line_color="rgba(220,53,69,0.5)", line_dash="dot",
-                                              annotation_text="Surachat 70", annotation_position="right", row=2, col=1)
+                                            annotation_text="Surachat 70", annotation_position="right", row=2, col=1)
                                 fig.add_hline(y=30, line_color="rgba(40,167,69,0.5)", line_dash="dot",
-                                              annotation_text="Survente 30", annotation_position="right", row=2, col=1)
+                                            annotation_text="Survente 30", annotation_position="right", row=2, col=1)
                                 fig.update_yaxes(range=[0, 100], title_text="RSI", row=2, col=1)
 
                             elif indicateur_choisi == "MACD":
@@ -1145,36 +1184,83 @@ if t_list:
 
                             elif indicateur_choisi == "Bollinger + MA":
                                 bb_range = h_data['BB_upper'] - h_data['BB_lower']
-                                h_data['BB_pct'] = ((h_data['Close'] - h_data['BB_lower']) / bb_range.replace(0, float('nan'))) * 100
+                                h_data['BB_pct'] = (
+                                    (h_data['Close'] - h_data['BB_lower'])
+                                    / bb_range.replace(0, float('nan'))
+                                ) * 100
                                 fig.add_trace(go.Scatter(
                                     x=h_data.index, y=h_data['BB_pct'],
                                     name="%B Bollinger", line=dict(color='purple', width=2)
                                 ), row=2, col=1)
-                                fig.add_hrect(y0=80, y1=130, fillcolor="rgba(220,53,69,0.08)", line_width=0, row=2, col=1)
-                                fig.add_hrect(y0=-30, y1=20, fillcolor="rgba(40,167,69,0.08)", line_width=0, row=2, col=1)
+                                fig.add_hrect(y0=80,  y1=130, fillcolor="rgba(220,53,69,0.08)",  line_width=0, row=2, col=1)
+                                fig.add_hrect(y0=-30, y1=20,  fillcolor="rgba(40,167,69,0.08)",  line_width=0, row=2, col=1)
                                 fig.add_hline(y=80, line_color="rgba(220,53,69,0.4)", line_dash="dot",
-                                              annotation_text="Haut BB", annotation_position="right", row=2, col=1)
+                                            annotation_text="Haut BB", annotation_position="right", row=2, col=1)
                                 fig.add_hline(y=20, line_color="rgba(40,167,69,0.4)", line_dash="dot",
-                                              annotation_text="Bas BB", annotation_position="right", row=2, col=1)
+                                            annotation_text="Bas BB", annotation_position="right", row=2, col=1)
                                 fig.update_yaxes(title_text="%B", row=2, col=1)
 
-                            # ---- MISE EN FORME : PAS DE TITRE → résout le chevauchement avec la barre Plotly ----
+                            # ---- RANGÉE 3 : PER historique ----
+                            if 'PER_hist' in h_data.columns and h_data['PER_hist'].notna().sum() > 5:
+                                per_colors = [
+                                    '#dc3545' if v > 30 else '#28a745' if v < 15 else '#1a73e8'
+                                    for v in h_data['PER_hist'].fillna(0)
+                                ]
+                                fig.add_trace(go.Scatter(
+                                    x=h_data.index, y=h_data['PER_hist'],
+                                    name="PER historique",
+                                    line=dict(color='#ff9800', width=1.5),
+                                    fill='tozeroy', fillcolor='rgba(255,152,0,0.08)'
+                                ), row=3, col=1)
+                                for per_ref, per_col, per_lbl in [
+                                    (15, "rgba(40,167,69,0.6)",  "PER 15"),
+                                    (20, "rgba(100,100,200,0.5)", "PER 20"),
+                                    (30, "rgba(220,53,69,0.6)",  "PER 30"),
+                                ]:
+                                    fig.add_hline(
+                                        y=per_ref, line_color=per_col, line_dash="dot",
+                                        annotation_text=per_lbl, annotation_position="right",
+                                        row=3, col=1
+                                    )
+                                fig.update_yaxes(title_text="PER", row=3, col=1)
+                            else:
+                                fig.add_annotation(
+                                    xref="paper", yref="paper", x=0.5, y=0.04,
+                                    text="PER non disponible (BNA = 0 ou négatif)",
+                                    showarrow=False, font=dict(color="gray", size=10)
+                                )
+
+                            # ---- MISE EN FORME GLOBALE ----
                             fig.update_layout(
-                                title=None,          # ← supprimé volontairement
-                                height=600,
-                                margin=dict(l=0, r=0, t=10, b=0),   # t=10 au lieu de 40
+                                title=None,
+                                height=700,
+                                margin=dict(l=10, r=70, t=10, b=10),
                                 hovermode="x unified",
                                 template="plotly_white",
                                 legend=dict(
                                     orientation="h",
-                                    yanchor="top", y=-0.08,   # légende sous le graphique
-                                    xanchor="center", x=0.5
+                                    yanchor="top", y=-0.05,
+                                    xanchor="center", x=0.5,
+                                    font=dict(size=11)
                                 )
                             )
-                            fig.update_yaxes(title_text="Prix", secondary_y=False, row=1, col=1,
-                                             showgrid=True, gridcolor='lightgray', fixedrange=False)
-                            fig.update_yaxes(title_text="Volume", secondary_y=True, row=1, col=1,
-                                             showgrid=False, fixedrange=False)
+
+                            # Axe GAUCHE row 1 = Volume
+                            fig.update_yaxes(
+                                title_text="Volume",
+                                secondary_y=False, row=1, col=1,
+                                showgrid=False, fixedrange=False,
+                                tickformat=".2s",
+                                side="left"
+                            )
+                            # Axe DROIT row 1 = Prix
+                            fig.update_yaxes(
+                                title_text="Prix",
+                                secondary_y=True, row=1, col=1,
+                                showgrid=True, gridcolor='rgba(200,200,200,0.4)',
+                                fixedrange=False,
+                                side="right"
+                            )
                             fig.update_xaxes(showgrid=False)
 
                             st.plotly_chart(
@@ -1188,6 +1274,8 @@ if t_list:
                                     'displaylogo': False
                                 }
                             )
+
+
                         else:
                             st.info("Données historiques non disponibles.")
                     except Exception as e:
