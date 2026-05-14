@@ -925,14 +925,14 @@ if t_list:
                 selection_finale = st.multiselect(
                     "Colonnes actives :",
                     options=toutes_les_cols,
-                    default=[c for c in cols_base_filtrees if c in toutes_les_cols]
-                )
+                        default=[c for c in cols_base_filtrees if c in toutes_les_cols]
+                        )
 
                 selection_figee = st.multiselect(
                     "Colonnes à figer à gauche :",
                     options=selection_finale,
-                    default=[c for c in cols_figees_base if c in selection_finale]
-                )
+                        default=[c for c in cols_figees_base if c in selection_finale]
+                        )
 
 
             hauteur_dynamique = (len(df) * 35) + 38
