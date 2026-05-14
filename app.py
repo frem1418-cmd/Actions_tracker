@@ -524,6 +524,40 @@ def fetch_stock_data(ticker_str):
             if v is None or (isinstance(v, float) and pd.isna(v)): return "N/A"
             return f"{v:.{decimals}f}"
 
+        # --- Croissance EBITDA ---
+        try:
+            ebitda_curr = stock.financials.loc['EBITDA'].iloc[0] if 'EBITDA' in stock.financials.index else None
+            ebitda_prev = stock.financials.loc['EBITDA'].iloc[1] if ('EBITDA' in stock.financials.index and len(stock.financials.columns) > 1) else None
+            if ebitda_curr and ebitda_prev and ebitda_prev != 0 and not pd.isna(ebitda_curr) and not pd.isna(ebitda_prev):
+                ebitda_growth = ((ebitda_curr - ebitda_prev) / abs(ebitda_prev)) * 100
+            else:
+                ebitda_growth = None
+        except Exception:
+            ebitda_growth = None
+
+        # --- P/FCF (Prix / Free Cash Flow par action) ---
+        try:
+            fcf_total = stock.cashflow.loc['Free Cash Flow'].dropna().iloc[0] if 'Free Cash Flow' in stock.cashflow.index else None
+            shares = info.get('sharesOutstanding', 0)
+            if fcf_total and shares and shares > 0 and not pd.isna(fcf_total):
+                fcf_per_share = fcf_total / shares
+                p_fcf = p / fcf_per_share if fcf_per_share > 0 else None
+            else:
+                p_fcf = None
+        except Exception:
+            p_fcf = None
+
+        # --- Formatage ---
+        def fmt_growth(v):
+            if v is None or (isinstance(v, float) and pd.isna(v)):
+                return "N/A"
+            return f"{v:+.1f}%"
+
+        def fmt_ratio(v, decimals=1):
+            if v is None or (isinstance(v, float) and pd.isna(v)):
+                return "N/A"
+            return f"{v:.{decimals}f}x"
+
         return {
             "Ticker": ticker_str, "Nom": info.get("longName", ticker_str),
             "Secteur": SECTORS_FR.get(info.get("sector"), info.get("sector")),
@@ -543,6 +577,8 @@ def fetch_stock_data(ticker_str):
             "Chg YTD": fmt_p(perf_ytd),
             "Chg 1M": fmt_p(perf_1m),
             "currency": sym,
+            "Croissance EBITDA": fmt_growth(ebitda_growth),
+            "P/FCF": fmt_ratio(p_fcf),
             "BNA Forward": ef, "PER Forward": pf, "Nb Analystes": info.get("numberOfAnalystOpinions", 0),
             "Entrée BNA -15%": vb * 0.85, "Entrée FCF -15%": vf * 0.85, "Entrée Analystes -15%": tm * 0.85,
             "Entrée Synthèse (-15%)": avg * 0.85, "Santé (Piotroski)": p_s, "p_details": p_d,
