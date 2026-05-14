@@ -531,7 +531,7 @@ def fetch_stock_data(ticker_str):
         except Exception:
             ebitda_growth = None
 
-        # --- P/FCF ---
+        # --- P/FCF (actuel) ---
         try:
             fcf_total = s.cashflow.loc['Free Cash Flow'].dropna().iloc[0] if 'Free Cash Flow' in s.cashflow.index else None
             if fcf_total and sh and sh > 0 and not pd.isna(fcf_total):
@@ -541,6 +541,21 @@ def fetch_stock_data(ticker_str):
                 p_fcf = None
         except Exception:
             p_fcf = None
+
+        # --- P/FCF historique moyen (3 dernières années) ---
+        try:
+            fcf_series = s.cashflow.loc['Free Cash Flow'].dropna() if 'Free Cash Flow' in s.cashflow.index else None
+            if fcf_series is not None and sh and sh > 0 and len(fcf_series) >= 2:
+                hist_pfcf_vals = []
+                for fcf_yr in fcf_series.head(3):
+                    if not pd.isna(fcf_yr) and fcf_yr > 0:
+                        fcf_ps_yr = fcf_yr / sh
+                        hist_pfcf_vals.append(p / fcf_ps_yr)
+                p_fcf_moy = sum(hist_pfcf_vals) / len(hist_pfcf_vals) if hist_pfcf_vals else None
+            else:
+                p_fcf_moy = None
+        except Exception:
+            p_fcf_moy = None
 
         def fmt_growth(v):
             if v is None or (isinstance(v, float) and pd.isna(v)): return "N/A"
@@ -564,8 +579,9 @@ def fetch_stock_data(ticker_str):
             "Marge Nette": pct_fmt(marge_nette),
             "Dette/Equity": num_fmt(dette_equity) if dette_equity else "N/A",
             "Beta": num_fmt(beta) if beta else "N/A",
-            "Croissance EBITDA": fmt_growth(ebitda_growth),   # NOUVEAU
-            "P/FCF": fmt_ratio(p_fcf),                         # NOUVEAU
+            "Croissance EBITDA": fmt_growth(ebitda_growth),
+            "P/FCF": fmt_ratio(p_fcf),
+            "P/FCF Moy 3a": fmt_ratio(p_fcf_moy),   # NOUVEAU
             "CAGR 3 ans": fmt_pct(cagr_3y),
             "CAGR 5 ans": fmt_pct(cagr_5y),
             "Chg 1J": fmt_p(perf_1j),
@@ -772,7 +788,7 @@ with st.sidebar:
         "BNA Actuel", "PER Actuel", "PEG Actuel", "PEG Forward",
         "BNA Forward", "PER Forward",
         "ROA", "ROE", "Marge Nette", "Dette/Equity", "Beta",
-        "Croissance EBITDA", "P/FCF",
+        "Croissance EBITDA", "P/FCF", "P/FCF Moy 3a",   # NOUVEAU
         "CAGR 3 ans", "CAGR 5 ans",
         "Entrée BNA -15%", "Entrée FCF -15%", "Entrée Analystes -15%", "Entrée Synthèse (-15%)",
         "Santé (Piotroski)",
@@ -907,7 +923,7 @@ if t_list:
                         except:
                             pass
 
-            # Coloration P/FCF (< 15x vert, > 30x rouge)
+            # Coloration P/FCF actuel (< 15x vert, > 30x rouge)
             if 'P/FCF' in df.columns:
                 for i, v in df['P/FCF'].items():
                     try:
@@ -916,6 +932,18 @@ if t_list:
                             styles.loc[i, 'P/FCF'] = 'color: #28a745; font-weight: bold;'
                         elif val > 30:
                             styles.loc[i, 'P/FCF'] = 'color: #dc3545; font-weight: bold;'
+                    except:
+                        pass
+
+            # Coloration P/FCF Moy 3a (< 15x vert, > 30x rouge)
+            if 'P/FCF Moy 3a' in df.columns:
+                for i, v in df['P/FCF Moy 3a'].items():
+                    try:
+                        val = float(str(v).replace('x', ''))
+                        if val < 15:
+                            styles.loc[i, 'P/FCF Moy 3a'] = 'color: #28a745; font-weight: bold;'
+                        elif val > 30:
+                            styles.loc[i, 'P/FCF Moy 3a'] = 'color: #dc3545; font-weight: bold;'
                     except:
                         pass
 
@@ -1031,8 +1059,8 @@ if t_list:
                         s_obj      = yf.Ticker(d['Ticker'])
                         current_yr = datetime.now().year
 
-                        # Contrôles
-                        ctrl_col1, ctrl_col2 = st.columns([0.45, 0.55])
+                        # Contrôles ligne 1 : Période + Indicateur
+                        ctrl_col1, ctrl_col2, ctrl_col3 = st.columns([0.30, 0.42, 0.28])
                         with ctrl_col1:
                             st.caption("📅 Période")
                             periode_choisie = st.radio(
@@ -1043,13 +1071,23 @@ if t_list:
                                 label_visibility="collapsed"
                             )
                         with ctrl_col2:
-                            st.caption("📊 Indicateur")
+                            st.caption("📊 Indicateur (panneau central)")
                             indicateur_choisi = st.radio(
                                 "Indicateur",
                                 ["RSI", "MACD", "Bollinger + MA"],
-                                index=0,                    # RSI par défaut
+                                index=0,
                                 horizontal=True,
                                 key=f"indic_{d['Ticker']}",
+                                label_visibility="collapsed"
+                            )
+                        with ctrl_col3:
+                            st.caption("📉 Graphique bas")
+                            graph_bas = st.radio(
+                                "Graphique bas",
+                                ["PER historique", "P/FCF historique", "Les deux", "Aucun"],
+                                index=0,
+                                horizontal=False,
+                                key=f"graph_bas_{d['Ticker']}",
                                 label_visibility="collapsed"
                             )
 
@@ -1073,6 +1111,24 @@ if t_list:
                             date_affichage = "1985-01-01"
 
                         h_data_large = s_obj.history(start=date_calcul)
+
+                        # --- Historique P/FCF annuel (calculé une fois, avant les subplots) ---
+                        pfcf_hist_data = {}
+                        try:
+                            sh_val = s_obj.info.get("sharesOutstanding", 1)
+                            cf_df  = s_obj.cashflow
+                            if 'Free Cash Flow' in cf_df.index and sh_val and sh_val > 0:
+                                fcf_row = cf_df.loc['Free Cash Flow'].dropna()
+                                for col_date, fcf_val in fcf_row.items():
+                                    if not pd.isna(fcf_val) and fcf_val > 0:
+                                        fcf_ps_yr = fcf_val / sh_val
+                                        yr = col_date.year
+                                        mask_yr = h_data_large.index.year == yr
+                                        prix_yr = h_data_large.loc[mask_yr, 'Close'].mean() if mask_yr.sum() > 0 else None
+                                        if prix_yr is not None and not pd.isna(prix_yr) and prix_yr > 0:
+                                            pfcf_hist_data[col_date] = prix_yr / fcf_ps_yr
+                        except Exception:
+                            pfcf_hist_data = {}
 
                         if not h_data_large.empty:
 
@@ -1116,7 +1172,7 @@ if t_list:
                                 shared_xaxes=True,
                                 row_heights=[0.55, 0.25, 0.20],
                                 vertical_spacing=0.03,
-                                subplot_titles=[None, None, None],   # évite le "undefined"
+                                subplot_titles=[None, None, None],
                                 specs=[
                                     [{"secondary_y": True}],
                                     [{"secondary_y": False}],
@@ -1172,7 +1228,7 @@ if t_list:
                                     name="MA20", line=dict(color='purple', dash='dot', width=1)
                                 ), row=1, col=1, secondary_y=True)
 
-                            # Lignes prix actuel & zone achat (référencent y2 = secondary_y row 1)
+                            # Lignes prix actuel & zone achat
                             prix_actuel = d['Prix Actuel']
                             fig.add_shape(
                                 type="line", xref="paper", x0=0, x1=1,
@@ -1245,35 +1301,98 @@ if t_list:
                                               annotation_text="Bas BB", annotation_position="right", row=2, col=1)
                                 fig.update_yaxes(title_text="%B", row=2, col=1)
 
-                            # ---- Row 3 : PER historique ----
-                            if 'PER_hist' in h_data.columns and h_data['PER_hist'].notna().sum() > 5:
-                                fig.add_trace(go.Scatter(
-                                    x=h_data.index, y=h_data['PER_hist'],
-                                    name="PER historique",
-                                    line=dict(color='#ff9800', width=1.5),
-                                    fill='tozeroy', fillcolor='rgba(255,152,0,0.08)'
-                                ), row=3, col=1)
-                                for per_ref, per_col, per_lbl in [
-                                    (15, "rgba(40,167,69,0.6)",   "PER 15"),
-                                    (20, "rgba(100,100,200,0.5)", "PER 20"),
-                                    (30, "rgba(220,53,69,0.6)",   "PER 30"),
-                                ]:
-                                    fig.add_hline(
-                                        y=per_ref, line_color=per_col, line_dash="dot",
-                                        annotation_text=per_lbl, annotation_position="right",
-                                        row=3, col=1
+                            # ---- Row 3 : Graphique bas configurable ----
+                            afficher_per  = graph_bas in ["PER historique", "Les deux"]
+                            afficher_pfcf = graph_bas in ["P/FCF historique", "Les deux"]
+
+                            if afficher_per:
+                                if 'PER_hist' in h_data.columns and h_data['PER_hist'].notna().sum() > 5:
+                                    fig.add_trace(go.Scatter(
+                                        x=h_data.index, y=h_data['PER_hist'],
+                                        name="PER historique",
+                                        line=dict(color='#ff9800', width=1.5),
+                                        fill='tozeroy', fillcolor='rgba(255,152,0,0.08)'
+                                    ), row=3, col=1)
+                                    for per_ref, per_col, per_lbl in [
+                                        (15, "rgba(40,167,69,0.6)",   "PER 15"),
+                                        (20, "rgba(100,100,200,0.5)", "PER 20"),
+                                        (30, "rgba(220,53,69,0.6)",   "PER 30"),
+                                    ]:
+                                        fig.add_hline(
+                                            y=per_ref, line_color=per_col, line_dash="dot",
+                                            annotation_text=per_lbl, annotation_position="right",
+                                            row=3, col=1
+                                        )
+                                    lbl_axe_per = "PER / P/FCF" if afficher_pfcf else "PER"
+                                    fig.update_yaxes(title_text=lbl_axe_per, row=3, col=1)
+                                else:
+                                    fig.add_annotation(
+                                        xref="paper", yref="paper", x=0.5, y=0.04,
+                                        text="PER non disponible (BNA = 0 ou négatif)",
+                                        showarrow=False, font=dict(color="gray", size=10)
                                     )
-                                fig.update_yaxes(title_text="PER", row=3, col=1)
-                            else:
-                                fig.add_annotation(
-                                    xref="paper", yref="paper", x=0.5, y=0.04,
-                                    text="PER non disponible (BNA = 0 ou négatif)",
-                                    showarrow=False, font=dict(color="gray", size=10)
-                                )
+
+                            if afficher_pfcf:
+                                if pfcf_hist_data:
+                                    pfcf_dates = sorted(pfcf_hist_data.keys())
+                                    pfcf_vals  = [pfcf_hist_data[d_key] for d_key in pfcf_dates]
+                                    fig.add_trace(go.Scatter(
+                                        x=pfcf_dates, y=pfcf_vals,
+                                        name="P/FCF historique",
+                                        mode="lines+markers",
+                                        line=dict(color='#00bcd4', width=2),
+                                        marker=dict(size=8),
+                                        fill='tozeroy', fillcolor='rgba(0,188,212,0.08)'
+                                    ), row=3, col=1)
+                                    # P/FCF actuel comme ligne de référence
+                                    try:
+                                        pfcf_actuel_val = float(str(d.get('P/FCF', '0')).replace('x', ''))
+                                        if pfcf_actuel_val > 0:
+                                            fig.add_hline(
+                                                y=pfcf_actuel_val,
+                                                line_color="rgba(0,188,212,0.8)", line_dash="dash",
+                                                annotation_text=f"Actuel {pfcf_actuel_val:.1f}x",
+                                                annotation_position="right", row=3, col=1
+                                            )
+                                    except Exception:
+                                        pass
+                                    # P/FCF moyen 3 ans comme ligne de référence
+                                    try:
+                                        pfcf_moy_val = float(str(d.get('P/FCF Moy 3a', '0')).replace('x', ''))
+                                        if pfcf_moy_val > 0:
+                                            fig.add_hline(
+                                                y=pfcf_moy_val,
+                                                line_color="rgba(0,188,212,0.4)", line_dash="dot",
+                                                annotation_text=f"Moy 3a {pfcf_moy_val:.1f}x",
+                                                annotation_position="left", row=3, col=1
+                                            )
+                                    except Exception:
+                                        pass
+                                    for pfcf_ref, pfcf_col, pfcf_lbl in [
+                                        (15, "rgba(40,167,69,0.6)",  "P/FCF 15x"),
+                                        (25, "rgba(220,53,69,0.6)",  "P/FCF 25x"),
+                                    ]:
+                                        fig.add_hline(
+                                            y=pfcf_ref, line_color=pfcf_col, line_dash="dot",
+                                            annotation_text=pfcf_lbl, annotation_position="left",
+                                            row=3, col=1
+                                        )
+                                    lbl_axe = "PER / P/FCF" if afficher_per else "P/FCF"
+                                    fig.update_yaxes(title_text=lbl_axe, row=3, col=1)
+                                else:
+                                    if not afficher_per:
+                                        fig.add_annotation(
+                                            xref="paper", yref="paper", x=0.5, y=0.04,
+                                            text="P/FCF historique non disponible",
+                                            showarrow=False, font=dict(color="gray", size=10)
+                                        )
+
+                            if graph_bas == "Aucun":
+                                fig.update_yaxes(visible=False, row=3, col=1)
+                                fig.update_xaxes(visible=False, row=3, col=1)
 
                             # ---- Layout global ----
                             fig.update_layout(
-                                # Nom de l'action comme titre — remplace le subtitle vide "undefined"
                                 title=dict(
                                     text=f"<b>{d['Nom']}</b> ({d['Ticker']})",
                                     font=dict(size=13, color="#555"),
@@ -1344,6 +1463,39 @@ if t_list:
 
                 with c2:
                     st.metric("Prix Actuel", f"{clean_num(d['Prix Actuel'])} {fd['currency']}")
+
+                    # Affichage P/FCF actuel et moyen côte à côte
+                    pfcf_col1, pfcf_col2 = st.columns(2)
+                    with pfcf_col1:
+                        pfcf_val_str = d.get('P/FCF', 'N/A')
+                        try:
+                            pfcf_num = float(str(pfcf_val_str).replace('x', ''))
+                            pfcf_color = "#28a745" if pfcf_num < 15 else ("#dc3545" if pfcf_num > 30 else "#ff9800")
+                        except:
+                            pfcf_color = "#555"
+                        st.markdown(
+                            f"<div style='background:#f8f9fa; border:1px solid #ddd; border-radius:8px; padding:10px; text-align:center;'>"
+                            f"<div style='font-size:0.75em; color:#555; font-weight:bold;'>P/FCF Actuel</div>"
+                            f"<div style='font-size:1.3em; font-weight:bold; color:{pfcf_color};'>{pfcf_val_str}</div>"
+                            f"</div>",
+                            unsafe_allow_html=True
+                        )
+                    with pfcf_col2:
+                        pfcf_moy_str = d.get('P/FCF Moy 3a', 'N/A')
+                        try:
+                            pfcf_moy_num = float(str(pfcf_moy_str).replace('x', ''))
+                            pfcf_moy_color = "#28a745" if pfcf_moy_num < 15 else ("#dc3545" if pfcf_moy_num > 30 else "#ff9800")
+                        except:
+                            pfcf_moy_color = "#555"
+                        st.markdown(
+            f"<div style='background:#f8f9fa; border:1px solid #ddd; border-radius:8px; padding:10px; text-align:center;'>"
+                            f"<div style='font-size:0.75em; color:#555; font-weight:bold;'>P/FCF Moy 3a</div>"
+                            f"<div style='font-size:1.3em; font-weight:bold; color:{pfcf_moy_color};'>{pfcf_moy_str}</div>"
+                            f"</div>",
+                            unsafe_allow_html=True
+                        )
+
+                    st.markdown("<br>", unsafe_allow_html=True)
                     st.markdown(
                         f"<div style='background:#28a745; color:white; padding:25px; border-radius:15px; text-align:center;'>"
                         f"<small>ENTRÉE CONSEILLÉE (-15%)</small><br/>"
