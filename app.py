@@ -912,19 +912,28 @@ if t_list:
                 st.info("La liste de tickers est vide.")
         else:
             with st.expander("🛠️ Personnaliser les colonnes affichées"):
-                toutes_les_cols = df.columns.tolist()
-                
+                # Colonnes internes à exclure de l'affichage tableau
+                COLS_INTERNES = {'p_details', 'full_data'}
+
+                # Filtrer toutes_les_cols (utilisé dans le multiselect)
+                toutes_les_cols = [c for c in df.columns.tolist() if c not in COLS_INTERNES]
+
+                # Filtrer cols_base (colonnes par défaut issues de la config GSheets)
+                cols_base_filtrees = [c for c in cols_base if c in toutes_les_cols]
+
+                # Utiliser cols_base_filtrees à la place de cols_base dans le multiselect :
                 selection_finale = st.multiselect(
                     "Colonnes actives :",
                     options=toutes_les_cols,
-                    default=[c for c in cols_base if c in toutes_les_cols]
+                    default=[c for c in cols_base_filtrees if c in toutes_les_cols]
                 )
-                
+
                 selection_figee = st.multiselect(
                     "Colonnes à figer à gauche :",
                     options=selection_finale,
                     default=[c for c in cols_figees_base if c in selection_finale]
                 )
+
 
             hauteur_dynamique = (len(df) * 35) + 38
             sel = st.dataframe(
@@ -1071,10 +1080,12 @@ if t_list:
                                 shared_xaxes=True,
                                 row_heights=[0.55, 0.25, 0.20],
                                 vertical_spacing=0.03,
+                                # Titres des sous-graphiques (None = pas de titre = pas de "undefined")
+                                subplot_titles=[None, None, None],
                                 specs=[
-                                    [{"secondary_y": True}],   # prix (droite) + volume (gauche)
-                                    [{"secondary_y": False}],  # indicateur
-                                    [{"secondary_y": False}],  # PER
+                                    [{"secondary_y": True}],
+                                    [{"secondary_y": False}],
+                                    [{"secondary_y": False}],
                                 ]
                             )
 
@@ -1232,9 +1243,15 @@ if t_list:
 
                             # ---- MISE EN FORME GLOBALE ----
                             fig.update_layout(
-                                title=None,
+                                # Nom de l'action comme titre principal — remplace le subtitle vide
+                                title=dict(
+                                    text=f"<b>{d['Nom']}</b> ({d['Ticker']})",
+                                    font=dict(size=14, color="#444"),
+                                    x=0,
+                                    pad=dict(b=0)
+                                ),
                                 height=700,
-                                margin=dict(l=10, r=70, t=10, b=10),
+                                margin=dict(l=10, r=70, t=35, b=10),   # t=35 pour laisser place au titre
                                 hovermode="x unified",
                                 template="plotly_white",
                                 legend=dict(
