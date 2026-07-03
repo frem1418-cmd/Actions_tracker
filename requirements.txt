@@ -8,3 +8,5 @@ feedparser
 beautifulsoup4
 st-gsheets-connection
 deep-translator
+Plaintext
+lxml
