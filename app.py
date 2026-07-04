@@ -1665,6 +1665,91 @@ def tdm_get_intraday_data(ticker_symbol):
     return hist
 
 
+@st.cache_data(ttl=1800)
+def tdm_get_ytd_data(ticker_symbol):
+    ticker = yf.Ticker(ticker_symbol)
+    hist = ticker.history(period="ytd", interval="1d")
+    return hist
+
+
+def _tdm_build_combined_chart(df, reference_price, chart_title, x_title):
+    """Construit un graphique unique combinant le prix (ligne, axe gauche)
+    et le volume (barres, axe droit) sur le même panneau."""
+    df = df.copy()
+    window = max(3, len(df) // 15)
+    df['MA'] = df['Close'].rolling(window=window, min_periods=1).mean()
+    df['Pct'] = ((df['Close'] - reference_price) / reference_price) * 100 if reference_price else 0
+    vol_colors = np.where(df['Close'] >= df['Open'], '#90b8e8', '#e89a9a')
+    vol_max = float(df['Volume'].max()) if not df['Volume'].dropna().empty else 1.0
+
+    fig = go.Figure()
+
+    fig.add_trace(go.Bar(
+        x=df.index, y=df['Volume'], name='Volume',
+        marker_color=vol_colors, opacity=0.45, yaxis='y2'
+    ))
+
+    fig.add_trace(go.Scatter(
+        x=df.index, y=[reference_price] * len(df), mode='lines',
+        line=dict(width=0), showlegend=False, hoverinfo='skip'
+    ))
+
+    fig.add_trace(go.Scatter(
+        x=df.index,
+        y=df['Close'],
+        mode='lines',
+        name='Prix',
+        line=dict(color='#2b6cb0', width=1.8),
+        fill='tonexty',
+        fillcolor='rgba(144,184,232,0.35)',
+        customdata=df['Pct'],
+        hovertemplate="Prix: %{y:,.2f}<br>Variation: %{customdata:.2f}%<extra></extra>"
+    ))
+
+    fig.add_trace(go.Scatter(
+        x=df.index, y=df['MA'],
+        mode='lines', name='Tendance (moy. mobile)',
+        line=dict(color='#e07b39', width=1.6)
+    ))
+
+    fig.update_layout(
+        title=chart_title,
+        height=600,
+        hovermode='x unified',
+        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
+        margin=dict(t=60, b=40),
+        xaxis=dict(title=x_title),
+        yaxis=dict(title="Prix"),
+        yaxis2=dict(
+            title="Volume", overlaying='y', side='right',
+            showgrid=False, range=[0, vol_max * 4]
+        )
+    )
+    return fig
+
+
+@st.cache_data(ttl=60)
+def tdm_get_index_daily_changes():
+    """Variation du jour (dernier cours vs clôture veille) pour chaque indice,
+    utilisée pour l'affichage rapide dans le menu latéral."""
+    changes = {}
+    symbols = list(dict.fromkeys(TDM_SYMBOL_MAP.values()))
+    try:
+        data = yf.download(symbols, period="5d", progress=False)['Close']
+        if isinstance(data, pd.Series):
+            data = data.to_frame(name=symbols[0])
+        for name, sym in TDM_SYMBOL_MAP.items():
+            try:
+                s = data[sym].dropna()
+                if len(s) >= 2:
+                    changes[name] = ((s.iloc[-1] - s.iloc[-2]) / s.iloc[-2]) * 100
+            except Exception:
+                continue
+    except Exception:
+        pass
+    return changes
+
+
 @st.cache_data(ttl=300)
 def tdm_get_previous_close(ticker_symbol, fallback):
     try:
@@ -1800,10 +1885,27 @@ def afficher_tableau_de_bord_marche():
 
     st.sidebar.header("📌 Configuration Marché")
     show_charts = st.sidebar.checkbox("Afficher les graphiques", value=True, key="tdm_show_charts")
+    show_ytd = st.sidebar.checkbox(
+        "Évolution sur l'année en cours (YTD)",
+        value=False,
+        key="tdm_show_ytd",
+        help="Basculer le graphique en données journalières depuis le 1er janvier, au lieu de l'intraday"
+    )
+
+    index_daily_changes = tdm_get_index_daily_changes()
+
+    def _label_avec_variation(nom):
+        pct = index_daily_changes.get(nom)
+        if pct is None:
+            return nom
+        emoji = "🟢" if pct >= 0 else "🔴"
+        return f"{nom}  {emoji} {pct:+.2f}%"
+
     selected_index = st.sidebar.radio(
         "Indices disponibles :",
         list(TDM_INDEX_TICKER_MAP.keys()),
-        key="tdm_selected_index"
+        key="tdm_selected_index",
+        format_func=_label_avec_variation
     )
     current_tickers = TDM_INDEX_TICKER_MAP[selected_index]
 
@@ -1814,13 +1916,25 @@ def afficher_tableau_de_bord_marche():
 
     if show_charts:
         target_symbol = TDM_SYMBOL_MAP.get(selected_index)
-        df_intraday = tdm_get_intraday_data(target_symbol)
 
-        if not df_intraday.empty:
-            prev_close = tdm_get_previous_close(target_symbol, df_intraday['Close'].iloc[0])
-            last_price = float(df_intraday['Close'].iloc[-1])
-            change_abs = last_price - prev_close
-            change_pct = (change_abs / prev_close) * 100 if prev_close else 0
+        if show_ytd:
+            df_chart = tdm_get_ytd_data(target_symbol)
+            x_title = "Date"
+            titre_periode = "Évolution du prix et du volume — Année en cours (YTD)"
+        else:
+            df_chart = tdm_get_intraday_data(target_symbol)
+            x_title = "Heure"
+            titre_periode = "Prix et Volume Intraday"
+
+        if not df_chart.empty:
+            if show_ytd:
+                reference_price = float(df_chart['Close'].iloc[0])
+            else:
+                reference_price = tdm_get_previous_close(target_symbol, df_chart['Close'].iloc[0])
+
+            last_price = float(df_chart['Close'].iloc[-1])
+            change_abs = last_price - reference_price
+            change_pct = (change_abs / reference_price) * 100 if reference_price else 0
             color_header = "#006622" if change_abs >= 0 else "#cc0000"
 
             st.markdown(
@@ -1837,75 +1951,11 @@ def afficher_tableau_de_bord_marche():
                 unsafe_allow_html=True
             )
 
-            df_intraday = df_intraday.copy()
-            window = max(3, len(df_intraday) // 15)
-            df_intraday['MA'] = df_intraday['Close'].rolling(window=window, min_periods=1).mean()
-            df_intraday['Pct'] = ((df_intraday['Close'] - prev_close) / prev_close) * 100
-            vol_colors = np.where(df_intraday['Close'] >= df_intraday['Open'], '#90b8e8', '#e89a9a')
-
-            fig = make_subplots(
-                rows=2, cols=1,
-                shared_xaxes=True,
-                row_heights=[0.72, 0.28],
-                vertical_spacing=0.03,
-                specs=[[{"secondary_y": True}], [{"secondary_y": False}]]
-            )
-
-            fig.add_trace(
-                go.Scatter(
-                    x=df_intraday.index, y=[prev_close] * len(df_intraday),
-                    mode='lines', line=dict(width=0), showlegend=False, hoverinfo='skip'
-                ), row=1, col=1, secondary_y=False
-            )
-
-            fig.add_trace(
-                go.Scatter(
-                    x=df_intraday.index,
-                    y=df_intraday['Close'],
-                    mode='lines',
-                    name='Prix',
-                    line=dict(color='#2b6cb0', width=1.6),
-                    fill='tonexty',
-                    fillcolor='rgba(144,184,232,0.35)',
-                    customdata=df_intraday['Pct'],
-                    hovertemplate="Prix: %{y:,.2f}<br>Variation: %{customdata:.2f}%<extra></extra>"
-                ),
-                row=1, col=1, secondary_y=False
-            )
-
-            fig.add_trace(
-                go.Scatter(
-                    x=df_intraday.index, y=df_intraday['MA'],
-                    mode='lines', name='Tendance (moy. mobile)',
-                    line=dict(color='#e07b39', width=1.6)
-                ), row=1, col=1, secondary_y=False
-            )
-
-            fig.add_trace(
-                go.Scatter(
-                    x=df_intraday.index, y=df_intraday['Pct'],
-                    mode='lines', line=dict(width=0), showlegend=False, hoverinfo='skip'
-                ), row=1, col=1, secondary_y=True
-            )
-
-            fig.add_trace(
-                go.Bar(
-                    x=df_intraday.index, y=df_intraday['Volume'],
-                    name='Volume', marker_color=vol_colors, showlegend=False
-                ), row=2, col=1
-            )
-
-            fig.update_yaxes(title_text="Prix", row=1, col=1, secondary_y=False)
-            fig.update_yaxes(title_text="Variation (%)", row=1, col=1, secondary_y=True, showgrid=False)
-            fig.update_yaxes(title_text="Volume", row=2, col=1)
-            fig.update_xaxes(title_text="Heure", row=2, col=1)
-
-            fig.update_layout(
-                title=f"{selected_index} — Prix et Volume Intraday",
-                height=650,
-                hovermode='x unified',
-                legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
-                margin=dict(t=60, b=40)
+            fig = _tdm_build_combined_chart(
+                df_chart,
+                reference_price,
+                f"{selected_index} — {titre_periode}",
+                x_title
             )
 
             st.plotly_chart(
@@ -1919,7 +1969,7 @@ def afficher_tableau_de_bord_marche():
                 }
             )
         else:
-            st.warning("Données intraday indisponibles pour cet indice.")
+            st.warning("Données indisponibles pour cet indice.")
 
     if not df_data.empty:
 
@@ -1978,6 +2028,9 @@ def afficher_tableau_de_bord_marche():
             hide_index=True,
             height=600,
             column_order=cols_to_display,
+            column_config={
+                "Nom": st.column_config.Column(pinned=True)
+            },
             on_select="rerun",
             selection_mode="single-row",
         )
