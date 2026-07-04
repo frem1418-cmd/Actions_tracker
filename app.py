@@ -491,6 +491,34 @@ def fetch_stock_data(ticker_str):
         div_date     = info.get("exDividendDate")
         div_date_str = datetime.fromtimestamp(div_date).strftime('%d/%m/%Y') if div_date else "N/A"
 
+        div_pay_date = info.get("dividendDate")
+        div_pay_date_str = datetime.fromtimestamp(div_pay_date).strftime('%d/%m/%Y') if div_pay_date else "N/A"
+
+        def _prochaine_date_resultats(ticker_obj, infos):
+            ts = infos.get("earningsTimestampStart") or infos.get("earningsTimestamp")
+            if ts:
+                try:
+                    return datetime.fromtimestamp(ts).strftime('%d/%m/%Y')
+                except Exception:
+                    pass
+            try:
+                cal = ticker_obj.calendar
+                if isinstance(cal, dict):
+                    ed = cal.get("Earnings Date")
+                    if isinstance(ed, (list, tuple)) and len(ed) > 0:
+                        return pd.to_datetime(ed[0]).strftime('%d/%m/%Y')
+                    elif ed:
+                        return pd.to_datetime(ed).strftime('%d/%m/%Y')
+                elif hasattr(cal, "loc") and "Earnings Date" in getattr(cal, "index", []):
+                    val = cal.loc["Earnings Date"]
+                    val = val.iloc[0] if hasattr(val, "iloc") else val
+                    return pd.to_datetime(val).strftime('%d/%m/%Y')
+            except Exception:
+                pass
+            return "N/A"
+
+        prochains_resultats_str = _prochaine_date_resultats(s, info)
+
         trailing_eps = info.get("trailingEps", 0) or 0
         trailing_pe  = info.get("trailingPE",  0) or 0
 
@@ -601,6 +629,8 @@ def fetch_stock_data(ticker_str):
             "Dividende (€/$)": info.get("dividendRate", 0),
             "Rendement %": round((info.get("dividendRate", 0) / p * 100), 2) if info.get("dividendRate") else 0,
             "Date Détachement": div_date_str,
+            "Date Versement Dividende": div_pay_date_str,
+            "Prochains Résultats": prochains_resultats_str,
             "Avis Analystes": RECO_FR.get(info.get("recommendationKey"), "N/A"),
             # Colonnes internes (non affichées dans le tableau)
             "p_details": p_d,
@@ -1096,7 +1126,8 @@ f"<div style='background:#f8f9fa; border:1px solid #ddd; border-radius:8px; padd
         )
         st.divider()
         st.write(f"**Dividende :** {clean_num(d['Dividende (€/$)'])} {fd['currency']} ({d['Rendement %']}%)")
-        st.write(f"**Détachement :** {d['Date Détachement']}")
+        st.write(f"**Détachement :** {d['Date Détachement']} | **Versement :** {d.get('Date Versement Dividende', 'N/A')}")
+        st.write(f"**Prochains résultats :** {d.get('Prochains Résultats', 'N/A')}")
         st.write(f"**Avis :** {d['Avis Analystes']} | **Secteur :** {d['Secteur']}")
 
         ticker_clean   = str(d['Ticker']).split('.')[0].upper() if d and 'Ticker' in d else "AAPL"
@@ -1227,9 +1258,19 @@ def get_index_constituents(nom_indice):
         suffixe = cfg["suffixe_yf"]
         resultat = []
         for tk, nom in zip(tickers_bruts, noms):
-            tk_propre = tk.replace(".", "-")  # ex: BRK.B -> BRK-B pour Yahoo US
-            if suffixe and not tk_propre.upper().endswith(suffixe.upper()):
-                tk_propre = f"{tk_propre}{suffixe}"
+            tk_propre = tk
+            if suffixe:
+                # Indices non-US : Wikipedia liste déjà le ticker Yahoo complet avec son
+                # suffixe de place boursière (ex: "AC.PA", "SAP.DE", ou même "MT.AS" pour
+                # ArcelorMittal coté à Amsterdam bien que membre du CAC 40) — on ne touche
+                # pas aux tickers qui ont déjà un suffixe, on n'ajoute celui de l'indice
+                # que si le ticker brut n'en a vraiment aucun.
+                if "." not in tk_propre:
+                    tk_propre = f"{tk_propre}{suffixe}"
+            else:
+                # Indices US : Yahoo utilise un tiret pour les classes d'actions
+                # (ex: BRK.B -> BRK-B)
+                tk_propre = tk_propre.replace(".", "-")
             resultat.append((tk_propre, nom))
         return resultat
 
@@ -1238,50 +1279,61 @@ def get_index_constituents(nom_indice):
 
 
 @st.cache_data(ttl=300)
-def get_index_market_data(tickers_noms, taille_lot=50):
+def get_index_market_data(tickers_noms, max_workers=8, _nonce=0):
     """
-    Prix, variation du jour, variation YTD, volume et montant échangé,
-    via téléchargement groupé (rapide, pas d'appel .info individuel).
+    Prix, variation du jour, variation YTD, volume et montant échangé.
+    Récupération par titre (via yf.Ticker.history), en parallèle mais avec une
+    concurrence limitée : Yahoo Finance rate-limite agressivement les rafales de
+    requêtes simultanées, ce qui peut faire échouer TOUS les titres d'un coup
+    même si chacun fonctionne bien pris isolément. Chaque titre est retenté une
+    fois en cas d'échec transitoire.
+    Le paramètre _nonce ne sert qu'à invalider le cache Streamlit sur demande
+    (bouton "Réessayer").
     """
-    tickers = [t for t, n in tickers_noms]
     noms_map = dict(tickers_noms)
-    lignes = []
+    tickers = [t for t, n in tickers_noms]
 
-    for i in range(0, len(tickers), taille_lot):
-        lot = tickers[i:i + taille_lot]
-        try:
-            data = yf.download(
-                lot, period="ytd", interval="1d",
-                group_by="ticker", threads=True, progress=False, auto_adjust=False
-            )
-        except Exception:
-            continue
-
-        for tk in lot:
+    def _one(tk):
+        derniere_erreur = "historique insuffisant"
+        for tentative in range(2):
             try:
-                sous = data[tk] if len(lot) > 1 else data
-                sous = sous.dropna(subset=["Close"])
-                if len(sous) < 2:
+                hist = yf.Ticker(tk).history(period="ytd", interval="1d", auto_adjust=False)
+                hist = hist.dropna(subset=["Close"])
+                if len(hist) < 2:
+                    time.sleep(0.3 * (tentative + 1))
                     continue
-                prix             = float(sous["Close"].iloc[-1])
-                prix_veille      = float(sous["Close"].iloc[-2])
-                prix_debut_annee = float(sous["Close"].iloc[0])
+                prix             = float(hist["Close"].iloc[-1])
+                prix_veille      = float(hist["Close"].iloc[-2])
+                prix_debut_annee = float(hist["Close"].iloc[0])
                 var_jour = (prix - prix_veille) / prix_veille * 100
                 var_ytd  = (prix - prix_debut_annee) / prix_debut_annee * 100
-                volume   = float(sous["Volume"].iloc[-1]) if pd.notna(sous["Volume"].iloc[-1]) else 0.0
-                lignes.append({
+                volume   = float(hist["Volume"].iloc[-1]) if pd.notna(hist["Volume"].iloc[-1]) else 0.0
+                vol_serie = hist["Volume"].dropna()
+                volume_moyen = float(vol_serie.mean()) if not vol_serie.empty else 0.0
+                montant = volume * prix
+                montant_moyen = float((hist["Close"] * hist["Volume"]).dropna().mean()) if not vol_serie.empty else 0.0
+                return {
                     "Ticker": tk,
                     "Nom": noms_map.get(tk, tk),
                     "Prix": prix,
                     "VarJourNum": var_jour,
                     "VarYTDNum": var_ytd,
                     "Volume": volume,
-                    "Montant": volume * prix,
-                })
-            except Exception:
-                continue
+                    "VolumeMoyen": volume_moyen,
+                    "Montant": montant,
+                    "MontantMoyen": montant_moyen,
+                }, None
+            except Exception as e:
+                derniere_erreur = str(e)
+                time.sleep(0.5 * (tentative + 1))
+        return None, f"{tk} : {derniere_erreur}"
 
-    return pd.DataFrame(lignes)
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        resultats = list(executor.map(_one, tickers))
+
+    lignes  = [r for r, err in resultats if r is not None]
+    erreurs = [err for r, err in resultats if err is not None]
+    return pd.DataFrame(lignes), erreurs[:5]
 
 
 @st.cache_data(ttl=3600)
@@ -1339,7 +1391,7 @@ def afficher_graphique_indice(symbole_yf, nom_indice):
         variation    = dernier_prix - prev_close
         var_pct      = (variation / prev_close) * 100
         couleur      = "#28a745" if var_pct >= 0 else "#dc3545"
-        couleur_fill = "rgba(40,167,69,0.08)" if var_pct >= 0 else "rgba(220,53,69,0.08)"
+        couleur_fill = "rgba(40,167,69,0.15)" if var_pct >= 0 else "rgba(220,53,69,0.15)"
 
         st.markdown(
             f"<div style='display:flex; align-items:baseline; gap:14px; flex-wrap:wrap;'>"
@@ -1350,30 +1402,54 @@ def afficher_graphique_indice(symbole_yf, nom_indice):
             f"</div>", unsafe_allow_html=True
         )
 
-        fig = make_subplots(
-            rows=2, cols=1, shared_xaxes=True,
-            row_heights=[0.75, 0.25], vertical_spacing=0.03
-        )
+        volume_dispo = "Volume" in hist.columns and hist["Volume"].fillna(0).sum() > 0
+
+        if volume_dispo:
+            fig = make_subplots(
+                rows=2, cols=1, shared_xaxes=True,
+                row_heights=[0.75, 0.25], vertical_spacing=0.03
+            )
+        else:
+            fig = make_subplots(rows=1, cols=1)
+
+        # Ligne de base à la clôture de la veille (trace invisible) + remplissage
+        # relatif ('tonexty') entre cette ligne et le prix, au lieu d'un remplissage
+        # vers zéro qui rend le graphique illisible sur des indices à forte valeur.
+        fig.add_trace(go.Scatter(
+            x=hist.index, y=[prev_close] * len(hist),
+            mode="lines", line=dict(width=0), showlegend=False, hoverinfo="skip"
+        ), row=1, col=1)
+
         fig.add_trace(go.Scatter(
             x=hist.index, y=hist["Close"], name="Prix",
-            line=dict(color=couleur, width=1.5), fill="tozeroy", fillcolor=couleur_fill
+            mode="lines", line=dict(color=couleur, width=1.5),
+            fill="tonexty", fillcolor=couleur_fill
         ), row=1, col=1)
+
         fig.add_hline(
             y=prev_close, line_dash="dot", line_color="gray",
             annotation_text=f"Clôture veille {prev_close:,.2f}", row=1, col=1
         )
-        fig.add_trace(go.Bar(
-            x=hist.index, y=hist["Volume"], name="Volume",
-            marker_color=couleur, opacity=0.3
-        ), row=2, col=1)
+
+        if volume_dispo:
+            fig.add_trace(go.Bar(
+                x=hist.index, y=hist["Volume"], name="Volume",
+                marker_color=couleur, opacity=0.3
+            ), row=2, col=1)
+            fig.update_yaxes(title_text="Volume", row=2, col=1)
+        else:
+            st.caption("ℹ️ Volume non communiqué par Yahoo Finance pour cet indice.")
 
         fig.update_layout(
             height=420, template="plotly_white", showlegend=False,
             margin=dict(l=10, r=10, t=20, b=10),
         )
         fig.update_yaxes(title_text="Prix", row=1, col=1)
-        fig.update_yaxes(title_text="Volume", row=2, col=1)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(
+            fig,
+            use_container_width=True,
+            config={'scrollZoom': True, 'displaylogo': False}
+        )
 
     except Exception as e:
         st.error(f"Erreur graphique indice : {e}")
@@ -1411,10 +1487,20 @@ def afficher_dashboard_indice(nom_indice):
     nb_composants = len(composants)
     st.caption(f"{nb_composants} valeurs")
 
+    retry_key = f"retry_nonce_{nom_indice}"
+    st.session_state.setdefault(retry_key, 0)
+
     with st.spinner("Récupération des cours..."):
-        df = get_index_market_data(tuple(composants))
+        df, erreurs_marche = get_index_market_data(tuple(composants), _nonce=st.session_state[retry_key])
     if df.empty:
         st.warning("Données de marché indisponibles pour le moment.")
+        if erreurs_marche:
+            with st.expander("Détails techniques (aide au diagnostic)"):
+                for e in erreurs_marche:
+                    st.caption(e)
+        if st.button("🔄 Réessayer", key=f"retry_{nom_indice}"):
+            st.session_state[retry_key] += 1
+            st.rerun()
         return
 
     charger_fondamentaux = st.checkbox(
@@ -1460,8 +1546,25 @@ def afficher_dashboard_indice(nom_indice):
         df_affiche["PB"] = df["PB"]
 
     hauteur = min((len(df_affiche) * 35) + 38, 850)
+
+    def style_volume_montant_indice(df_style):
+        styles = pd.DataFrame('', index=df_style.index, columns=df_style.columns)
+        for idx in df_style.index:
+            try:
+                if df.loc[idx, 'Volume'] > df.loc[idx, 'VolumeMoyen'] * 1.5:
+                    styles.loc[idx, 'Volume'] = 'color: #cc0000;'
+            except Exception:
+                pass
+            try:
+                if df.loc[idx, 'Montant'] > df.loc[idx, 'MontantMoyen'] * 1.5:
+                    styles.loc[idx, 'Montant'] = 'color: #cc0000;'
+            except Exception:
+                pass
+        return styles
+
     sel = st.dataframe(
-        df_affiche.style.apply(style_heatmap_indice, axis=None).format(
+        df_affiche.style.apply(style_heatmap_indice, axis=None)
+                         .apply(style_volume_montant_indice, axis=None).format(
             formatter=lambda x: clean_num(x) if isinstance(x, (int, float)) else x
         ),
         on_select="rerun",
@@ -1471,19 +1574,14 @@ def afficher_dashboard_indice(nom_indice):
         height=hauteur,
     )
 
-    # --- Détail fondamental au clic (réutilise fetch_stock_data existant) ---
+    # --- Détail fondamental au clic (réutilise fetch_stock_data + la fiche complète) ---
     if sel.selection and sel.selection.rows:
         ticker_choisi = df.iloc[sel.selection.rows[0]]["Ticker"]
         st.divider()
         with st.spinner(f"Analyse détaillée de {ticker_choisi}..."):
             detail = fetch_stock_data(ticker_choisi)
         if detail:
-            st.subheader(f"🏢 {detail['Nom']} ({detail['Ticker']})")
-            m1, m2, m3, m4 = st.columns(4)
-            m1.metric("Prix", clean_num(detail["Prix Actuel"]))
-            m2.metric("PER", detail.get("PER Actuel", "N/A"))
-            m3.metric("ROE", detail.get("ROE", "N/A"))
-            m4.metric("Avis Analystes", detail.get("Avis Analystes", "N/A"))
+            afficher_detail_action(detail)
         else:
             st.info("Données fondamentales indisponibles pour cette valeur.")
 
@@ -1642,7 +1740,7 @@ TDM_INDEX_TICKER_MAP = {
 # pas de ticker d'indice directement exploitable en intraday : on utilise l'ETF de référence
 # le plus liquide qui réplique l'indice (URTH, EEM, FXI) comme proxy du niveau/variation.
 TDM_SYMBOL_MAP = {
-    "NASDAQ 100 Tech Heavyweights": "^NDX",
+    "NASDAQ 100 Tech": "^NDX",
     "CAC 40 (France)": "^FCHI",
     "DAX (Allemagne)": "^GDAXI",
     "S&P 500 (USA)": "^GSPC",
@@ -1987,10 +2085,10 @@ def afficher_tableau_de_bord_marche():
         def style_volume_amount_alerts(df):
             style_df = pd.DataFrame('', index=df.index, columns=df.columns)
             for idx in df.index:
-                if df.loc[idx, 'Volume_Raw'] > df.loc[idx, 'Volume_Moyen_Raw']:
-                    style_df.loc[idx, 'Volume'] = 'color: #ff4d4d;'
-                if df.loc[idx, 'Amount_Raw'] > df.loc[idx, 'Amount_Moyen_Raw']:
-                    style_df.loc[idx, 'Montant'] = 'color: #ff4d4d;'
+                if df.loc[idx, 'Volume_Raw'] > df.loc[idx, 'Volume_Moyen_Raw'] * 1.5:
+                    style_df.loc[idx, 'Volume'] = 'color: #cc0000;'
+                if df.loc[idx, 'Amount_Raw'] > df.loc[idx, 'Amount_Moyen_Raw'] * 1.5:
+                    style_df.loc[idx, 'Montant'] = 'color: #cc0000;'
             return style_df
 
         df_styled = df_data.style\
@@ -2242,7 +2340,8 @@ with st.sidebar:
         "Entrée BNA -15%", "Entrée FCF -15%", "Entrée Analystes -15%", "Entrée Synthèse (-15%)",
         "Santé (Piotroski)",
         "Chg 1J", "Chg 1M", "Chg YTD",
-        "Nb Analystes", "Dividende (€/$)", "Rendement %", "Date Détachement", "Avis Analystes"
+        "Nb Analystes", "Dividende (€/$)", "Rendement %", "Date Détachement",
+        "Date Versement Dividende", "Prochains Résultats", "Avis Analystes"
     ]
 
 # =======================================================================
@@ -2283,6 +2382,10 @@ if t_list:
     if data_res:
         df = pd.DataFrame(data_res)
         df['Date Détachement'] = pd.to_datetime(df['Date Détachement'], errors='coerce', dayfirst=True)
+        if 'Date Versement Dividende' in df.columns:
+            df['Date Versement Dividende'] = pd.to_datetime(df['Date Versement Dividende'], errors='coerce', dayfirst=True)
+        if 'Prochains Résultats' in df.columns:
+            df['Prochains Résultats'] = pd.to_datetime(df['Prochains Résultats'], errors='coerce', dayfirst=True)
         ticker_to_name = dict(zip(df['Ticker'], df['Nom']))
 
         # Colonnes internes à masquer du tableau
@@ -2473,6 +2576,8 @@ if t_list:
                 height=min(hauteur_dynamique, 850),
                 column_config={
                     "Date Détachement": st.column_config.DateColumn("Date Détachement", format="DD/MM/YYYY"),
+                    "Date Versement Dividende": st.column_config.DateColumn("Date Versement Dividende", format="DD/MM/YYYY"),
+                    "Prochains Résultats": st.column_config.DateColumn("Prochains Résultats", format="DD/MM/YYYY"),
                     **{col: st.column_config.Column(pinned=True) for col in selection_figee}
                 },
             )
