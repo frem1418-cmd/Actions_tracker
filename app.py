@@ -1740,7 +1740,7 @@ TDM_INDEX_TICKER_MAP = {
 # pas de ticker d'indice directement exploitable en intraday : on utilise l'ETF de référence
 # le plus liquide qui réplique l'indice (URTH, EEM, FXI) comme proxy du niveau/variation.
 TDM_SYMBOL_MAP = {
-    "NASDAQ 100 Tech": "^NDX",
+    "NASDAQ 100 Tech Heavyweights": "^NDX",
     "CAC 40 (France)": "^FCHI",
     "DAX (Allemagne)": "^GDAXI",
     "S&P 500 (USA)": "^GSPC",
