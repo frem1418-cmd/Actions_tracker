@@ -1724,7 +1724,8 @@ TDM_INDEX_TICKER_MAP = {
     "NASDAQ 100 Tech": TDM_TICKERS_NASDAQ,
     "CAC 40 (France)": TDM_TICKERS_CAC40,
     "DAX (Allemagne)": TDM_TICKERS_DAX,
-    "S&P 500 (USA)": TDM_TICKERS_SP500,
+    "S&P 500 Lite (USA)": TDM_TICKERS_SP500,
+    "S&P 500 Full (USA)": TDM_TICKERS_SP500,
     "Nikkei 225 (Japon)": TDM_TICKERS_NIKKEI,
     "EURO STOXX 50": TDM_TICKERS_EUROSTOXX50,
     "FTSE 100 (Royaume-Uni)": TDM_TICKERS_FTSE100,
@@ -1736,6 +1737,37 @@ TDM_INDEX_TICKER_MAP = {
     "FTSE China 50": TDM_TICKERS_FTSECHINA50,
 }
 
+# Indices pour lesquels on dispose d'un scraper Wikipedia (voir INDICES_PRINCIPAUX /
+# get_index_constituents plus haut) donnant la composition RÉELLE et à jour, au lieu
+# d'une liste "indicative" codée en dur. On les fait correspondre aux clés utilisées
+# dans cette page (nom différent du libellé utilisé sur la page Portefeuille).
+TDM_WIKI_INDEX_NAMES = {
+    "NASDAQ 100 Tech": "Nasdaq 100",
+    "CAC 40 (France)": "CAC 40",
+    "DAX (Allemagne)": "DAX",
+    # "S&P 500 Full (USA)" utilise la composition réelle (~500 valeurs) via Wikipedia —
+    # nettement plus lent (requêtes séquentielles par valeur), d'où l'entrée séparée
+    # "S&P 500 Lite (USA)" qui reste sur un échantillon statique rapide.
+    "S&P 500 Full (USA)": "S&P 500",
+}
+
+
+def tdm_resolve_index_tickers(nom_indice_tdm):
+    """Retourne la liste des tickers composant l'indice sélectionné.
+    Priorité à la composition réelle scrapée sur Wikipedia (même source que la page
+    Portefeuille > Indices Principaux, mise en cache 24h) quand elle est disponible ;
+    repli sur la liste statique "indicative" sinon (ou en cas d'échec du scraping)."""
+    wiki_name = TDM_WIKI_INDEX_NAMES.get(nom_indice_tdm)
+    if wiki_name:
+        try:
+            constituents = get_index_constituents(wiki_name)
+            tickers = [tk for tk, _nom in constituents] if constituents else []
+            if tickers:
+                return tickers
+        except Exception:
+            pass
+    return TDM_INDEX_TICKER_MAP.get(nom_indice_tdm, [])
+
 # Symbole de l'indice lui-même (pour le graphique intraday agrégé)
 # NOTE : pour MSCI World / MSCI Emerging Markets / FTSE China 50, Yahoo Finance ne propose
 # pas de ticker d'indice directement exploitable en intraday : on utilise l'ETF de référence
@@ -1744,7 +1776,8 @@ TDM_SYMBOL_MAP = {
     "NASDAQ 100 Tech": "^NDX",
     "CAC 40 (France)": "^FCHI",
     "DAX (Allemagne)": "^GDAXI",
-    "S&P 500 (USA)": "^GSPC",
+    "S&P 500 Lite (USA)": "^GSPC",
+    "S&P 500 Full (USA)": "^GSPC",
     "Nikkei 225 (Japon)": "^N225",
     "EURO STOXX 50": "^STOXX50E",
     "FTSE 100 (Royaume-Uni)": "^FTSE",
@@ -2100,7 +2133,7 @@ def afficher_tableau_de_bord_marche():
     compare_selection = []
     if compare_mode:
         TDM_COMPARE_PRESETS = {
-            "Indices majeurs": ["CAC 40 (France)", "S&P 500 (USA)", "DAX (Allemagne)", "NASDAQ 100 Tech"],
+            "Indices majeurs": ["CAC 40 (France)", "S&P 500 Lite (USA)", "DAX (Allemagne)", "NASDAQ 100 Tech"],
             "Europe": ["CAC 40 (France)", "DAX (Allemagne)", "FTSE 100 (Royaume-Uni)",
                        "EURO STOXX 50", "FTSE MIB (Italie)"],
             "Marchés émergents": ["MSCI Emerging Markets", "NIFTY 50 (Inde)", "FTSE China 50"],
@@ -2119,13 +2152,13 @@ def afficher_tableau_de_bord_marche():
                     st.rerun()
 
             default_compare = [
-                n for n in ["CAC 40 (France)", "S&P 500 (USA)", "DAX (Allemagne)",
+                n for n in ["CAC 40 (France)", "S&P 500 Lite (USA)", "DAX (Allemagne)",
                             "NASDAQ 100 Tech", "MSCI World"]
                 if n in TDM_INDEX_TICKER_MAP
             ]
             compare_selection = st.multiselect(
                 "Sélection",
-                options=list(TDM_INDEX_TICKER_MAP.keys()),
+                options=sorted(TDM_INDEX_TICKER_MAP.keys()),
                 default=default_compare,
                 key="tdm_compare_selection",
                 label_visibility="collapsed",
@@ -2136,15 +2169,20 @@ def afficher_tableau_de_bord_marche():
 
     selected_index = st.sidebar.radio(
         "Indices disponibles :" if not compare_mode else "Indice pour le tableau détaillé :",
-        list(TDM_INDEX_TICKER_MAP.keys()),
+        sorted(TDM_INDEX_TICKER_MAP.keys()),
         key="tdm_selected_index",
         format_func=_label_avec_variation
     )
-    current_tickers = TDM_INDEX_TICKER_MAP[selected_index]
+    current_tickers = tdm_resolve_index_tickers(selected_index)
 
     st.title("📈 Tableau de Bord d'Indicateurs Financiers")
 
-    with st.spinner("Chargement des données..."):
+    spinner_msg = "Chargement des données..."
+    if len(current_tickers) > 60:
+        spinner_msg = (f"Chargement des données pour les {len(current_tickers)} valeurs de l'indice "
+                        f"(composition réelle via Wikipedia) — cela peut prendre une minute ou plus...")
+
+    with st.spinner(spinner_msg):
         df_data = tdm_get_advanced_market_data(current_tickers, show_entry_price)
 
     if show_charts and compare_mode:
@@ -2346,6 +2384,35 @@ def afficher_tableau_de_bord_marche():
             caption_txt += (" 🟢 Nom en vert et gras si le dernier prix est inférieur à l'Entrée Conseillée ; "
                              "en plus surligné en vert clair si l'Entrée BNA -15% le confirme également.")
         st.caption(caption_txt)
+
+        df_export = df_data[cols_to_display].copy()
+        nom_fichier = selected_index.split(" (")[0].replace(" ", "_").replace("&", "et")
+
+        col_export1, col_export2, _col_export_spacer = st.columns([1, 1, 4])
+        with col_export1:
+            st.download_button(
+                "📥 Exporter en CSV",
+                data=df_export.to_csv(index=False, sep=';').encode('utf-8-sig'),
+                file_name=f"{nom_fichier}_composition.csv",
+                mime="text/csv",
+                use_container_width=True,
+                key="tdm_export_csv"
+            )
+        with col_export2:
+            try:
+                excel_buffer = io.BytesIO()
+                with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+                    df_export.to_excel(writer, index=False, sheet_name='Composition')
+                st.download_button(
+                    "📥 Exporter en Excel",
+                    data=excel_buffer.getvalue(),
+                    file_name=f"{nom_fichier}_composition.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    use_container_width=True,
+                    key="tdm_export_xlsx"
+                )
+            except Exception:
+                pass
 
         sel_marche = st.dataframe(
             df_styled,
