@@ -1720,7 +1720,7 @@ TDM_TICKERS_FTSECHINA50 = [
 ]
 
 TDM_INDEX_TICKER_MAP = {
-    "NASDAQ 100 Tech Heavyweights": TDM_TICKERS_NASDAQ,
+    "NASDAQ 100 Tech": TDM_TICKERS_NASDAQ,
     "CAC 40 (France)": TDM_TICKERS_CAC40,
     "DAX (Allemagne)": TDM_TICKERS_DAX,
     "S&P 500 (USA)": TDM_TICKERS_SP500,
@@ -1740,7 +1740,7 @@ TDM_INDEX_TICKER_MAP = {
 # pas de ticker d'indice directement exploitable en intraday : on utilise l'ETF de référence
 # le plus liquide qui réplique l'indice (URTH, EEM, FXI) comme proxy du niveau/variation.
 TDM_SYMBOL_MAP = {
-    "NASDAQ 100 Tech Heavyweights": "^NDX",
+    "NASDAQ 100 Tech": "^NDX",
     "CAC 40 (France)": "^FCHI",
     "DAX (Allemagne)": "^GDAXI",
     "S&P 500 (USA)": "^GSPC",
@@ -1750,7 +1750,7 @@ TDM_SYMBOL_MAP = {
     "Russell 2000 (États-Unis)": "^RUT",
     "MSCI World": "URTH",
     "MSCI Emerging Markets": "EEM",
-    "FTSE MIB (Italie)": "^FTSEMIB",
+    "FTSE MIB (Italie)": "FTSEMIB.MI",
     "NIFTY 50 (Inde)": "^NSEI",
     "FTSE China 50": "FXI",
 }
@@ -1826,6 +1826,48 @@ def _tdm_build_combined_chart(df, reference_price, chart_title, x_title):
     return fig
 
 
+TDM_COMPARISON_COLORS = [
+    "#2b6cb0", "#e07b39", "#38a169", "#d53f8c", "#805ad5",
+    "#dd6b20", "#319795", "#e53e3e", "#718096", "#b7791f"
+]
+
+
+def _tdm_build_comparison_chart(data_dict, chart_title, x_title):
+    """Superpose la performance (%) de plusieurs indices, rebasée à 0% au
+    premier point de la période, sur un même graphique."""
+    fig = go.Figure()
+
+    for i, (nom, df) in enumerate(data_dict.items()):
+        if df is None or df.empty:
+            continue
+        base = float(df['Close'].iloc[0])
+        if not base:
+            continue
+        pct = ((df['Close'] - base) / base) * 100
+        color = TDM_COMPARISON_COLORS[i % len(TDM_COMPARISON_COLORS)]
+        fig.add_trace(go.Scatter(
+            x=df.index,
+            y=pct,
+            mode='lines',
+            name=nom,
+            line=dict(color=color, width=2),
+            hovertemplate=f"{nom}: " + "%{y:+.2f}%<extra></extra>"
+        ))
+
+    fig.add_hline(y=0, line_dash="dot", line_color="#999999", opacity=0.6)
+
+    fig.update_layout(
+        title=chart_title,
+        height=600,
+        hovermode='x unified',
+        legend=dict(orientation='h', yanchor='bottom', y=1.02, xanchor='right', x=1),
+        margin=dict(t=60, b=40),
+        xaxis=dict(title=x_title),
+        yaxis=dict(title="Performance (%)", ticksuffix="%")
+    )
+    return fig
+
+
 @st.cache_data(ttl=60)
 def tdm_get_index_daily_changes():
     """Variation du jour (dernier cours vs clôture veille) pour chaque indice,
@@ -1861,7 +1903,7 @@ def tdm_get_previous_close(ticker_symbol, fallback):
 
 
 @st.cache_data(ttl=300)
-def tdm_get_advanced_market_data(tickers):
+def tdm_get_advanced_market_data(tickers, compute_entry_price=False):
     df_prices = yf.download(tickers, start="2026-01-01", progress=False)
     if isinstance(df_prices.columns, pd.MultiIndex):
         df_prices.columns = df_prices.columns.remove_unused_levels()
@@ -1910,6 +1952,37 @@ def tdm_get_advanced_market_data(tickers):
                 else:
                     dividend_yield = np.nan
 
+            # --- Entrée conseillée (-15%) : même logique que la fiche détaillée
+            # (moyenne des modèles BNA Forward / FCF / Cible Analystes, puis -15%) ---
+            # Calcul optionnel : nécessite un appel cashflow supplémentaire par valeur,
+            # donc désactivé par défaut pour ne pas ralentir le chargement.
+            entree_conseillee = np.nan
+            entree_bna = np.nan
+            if compute_entry_price:
+                try:
+                    ef = info.get('forwardEps') or 0
+                    pf = info.get('forwardPE') or 15
+                    vb = ef * pf if ef else 0
+                    entree_bna = vb * 0.85 if vb > 0 else np.nan
+
+                    tm = info.get('targetMeanPrice') or 0
+
+                    sh_out = info.get('sharesOutstanding') or 0
+                    try:
+                        fcf_series = ticker_obj.cashflow.loc['Free Cash Flow'].dropna().head(3) \
+                            if 'Free Cash Flow' in ticker_obj.cashflow.index else pd.Series(dtype=float)
+                        fcf_raw = fcf_series.mean() if not fcf_series.empty else 0
+                    except Exception:
+                        fcf_raw = 0
+                    vf = (fcf_raw / sh_out * 1.05) * pf if sh_out and fcf_raw else 0
+
+                    mods = [v for v in [vb, vf, tm] if v and v > 0]
+                    fair_avg = sum(mods) / len(mods) if mods else np.nan
+                    entree_conseillee = fair_avg * 0.85 if not pd.isna(fair_avg) else np.nan
+                except Exception:
+                    entree_conseillee = np.nan
+                    entree_bna = np.nan
+
             rows.append({
                 "Ticker": t,
                 "Name": info.get('longName', t),
@@ -1917,6 +1990,8 @@ def tdm_get_advanced_market_data(tickers):
                 "IntradayReturn": ((p_latest - p_prev_close) / p_prev_close) * 100,
                 "Price_Latest": p_latest,
                 "Return_Latest": ((p_latest - p_open_today) / p_open_today) * 100 if p_open_today != 0 else 0,
+                "EntreeConseillee_Raw": entree_conseillee,
+                "EntreeBNA_Raw": entree_bna,
 
                 "Volume_Raw": volume_actuel,
                 "Volume_Moyen_Raw": volume_moyen,
@@ -1952,19 +2027,24 @@ def tdm_get_advanced_market_data(tickers):
 
     df['MarketCap'] = df['MarketCap_Raw'].apply(_tdm_format_billions)
     df['SharesOutstanding'] = df['SharesOutstanding_Raw'].apply(_tdm_format_smart_large_numbers)
+    df['EntreeConseillee'] = df['EntreeConseillee_Raw']
+    df['EntreeBNA'] = df['EntreeBNA_Raw']
 
     ordered_cols = [
         "Ticker", "Name", "Weight", "Price", "IntradayReturn", "Price_Latest",
-        "Return_Latest", "Volume", "VolumeMoyen", "Amount", "AmountMoyen", "IntradayContribution",
-        "MarketCap", "YTDReturn", "YTDContribution", "PE", "PB", "Profit_TTM",
+        "EntreeConseillee", "EntreeBNA", "Return_Latest", "Volume", "VolumeMoyen", "Amount", "AmountMoyen",
+        "IntradayContribution", "MarketCap", "YTDReturn", "YTDContribution", "PE", "PB", "Profit_TTM",
         "DividendYield", "Dividend", "SharesOutstanding", "Exchange", "Timestamp_Latest",
-        "Volume_Raw", "Volume_Moyen_Raw", "Amount_Raw", "Amount_Moyen_Raw"
+        "Volume_Raw", "Volume_Moyen_Raw", "Amount_Raw", "Amount_Moyen_Raw",
+        "EntreeConseillee_Raw", "EntreeBNA_Raw"
     ]
     df = df[ordered_cols]
 
     fr_cols = {
         "Ticker": "Ticker", "Name": "Nom", "Weight": "Poids", "Price": "Prix Veille",
         "IntradayReturn": "Var. Intraday (%)", "Price_Latest": "Dernier Prix",
+        "EntreeConseillee": "Entrée Conseillée",
+        "EntreeBNA": "Entrée BNA -15%",
         "Return_Latest": "Var. Session (%)",
         "Volume": "Volume", "VolumeMoyen": "Volume Moyen",
         "Amount": "Montant", "AmountMoyen": "Montant Moyen",
@@ -1973,7 +2053,9 @@ def tdm_get_advanced_market_data(tickers):
         "YTDReturn": "Var. YTD (%)", "YTDContribution": "Contrib. YTD", "PE": "PER",
         "PB": "P/B", "Profit_TTM": "Bénéfice TTM", "DividendYield": "Rend. Dividende",
         "Dividend": "Dividende", "SharesOutstanding": "Actions en Circ.",
-        "Exchange": "Bourse", "Timestamp_Latest": "Dernier Horodatage"
+        "Exchange": "Bourse", "Timestamp_Latest": "Dernier Horodatage",
+        "EntreeConseillee_Raw": "EntreeConseillee_Raw",
+        "EntreeBNA_Raw": "EntreeBNA_Raw"
     }
     return df.rename(columns=fr_cols)
 
@@ -1989,6 +2071,13 @@ def afficher_tableau_de_bord_marche():
         key="tdm_show_ytd",
         help="Basculer le graphique en données journalières depuis le 1er janvier, au lieu de l'intraday"
     )
+    show_entry_price = st.sidebar.checkbox(
+        "💰 Afficher l'entrée conseillée (-15%)",
+        value=False,
+        key="tdm_show_entry_price",
+        help="Calcule un prix d'entrée théorique par valeur (moyenne des modèles BNA/FCF/Analystes -15%). "
+             "Ralentit le chargement du tableau car cela nécessite une requête supplémentaire par action."
+    )
 
     index_daily_changes = tdm_get_index_daily_changes()
 
@@ -1999,8 +2088,53 @@ def afficher_tableau_de_bord_marche():
         emoji = "🟢" if pct >= 0 else "🔴"
         return f"{nom}  {emoji} {pct:+.2f}%"
 
+    st.sidebar.divider()
+    compare_mode = st.sidebar.checkbox(
+        "🔀 Comparer plusieurs indices",
+        value=False,
+        key="tdm_compare_mode",
+        help="Superpose la performance (%) de plusieurs indices sur un même graphique"
+    )
+
+    compare_selection = []
+    if compare_mode:
+        TDM_COMPARE_PRESETS = {
+            "Indices majeurs": ["CAC 40 (France)", "S&P 500 (USA)", "DAX (Allemagne)", "NASDAQ 100 Tech"],
+            "Europe": ["CAC 40 (France)", "DAX (Allemagne)", "FTSE 100 (Royaume-Uni)",
+                       "EURO STOXX 50", "FTSE MIB (Italie)"],
+            "Marchés émergents": ["MSCI Emerging Markets", "NIFTY 50 (Inde)", "FTSE China 50"],
+            "Effacer": [],
+        }
+
+        with st.sidebar.container(border=True):
+            st.markdown('<div class="tdm-compare-title">📊 Indices à comparer</div>', unsafe_allow_html=True)
+
+            preset_cols = st.columns(2)
+            for i, (label, tickers_preset) in enumerate(TDM_COMPARE_PRESETS.items()):
+                if preset_cols[i % 2].button(label, key=f"tdm_preset_{i}", use_container_width=True):
+                    st.session_state["tdm_compare_selection"] = [
+                        n for n in tickers_preset if n in TDM_INDEX_TICKER_MAP
+                    ]
+                    st.rerun()
+
+            default_compare = [
+                n for n in ["CAC 40 (France)", "S&P 500 (USA)", "DAX (Allemagne)",
+                            "NASDAQ 100 Tech", "MSCI World"]
+                if n in TDM_INDEX_TICKER_MAP
+            ]
+            compare_selection = st.multiselect(
+                "Sélection",
+                options=list(TDM_INDEX_TICKER_MAP.keys()),
+                default=default_compare,
+                key="tdm_compare_selection",
+                label_visibility="collapsed",
+                placeholder="Choisir des indices à comparer…"
+            )
+            st.caption(f"{len(compare_selection)} indice(s) sélectionné(s)")
+        st.sidebar.divider()
+
     selected_index = st.sidebar.radio(
-        "Indices disponibles :",
+        "Indices disponibles :" if not compare_mode else "Indice pour le tableau détaillé :",
         list(TDM_INDEX_TICKER_MAP.keys()),
         key="tdm_selected_index",
         format_func=_label_avec_variation
@@ -2010,9 +2144,69 @@ def afficher_tableau_de_bord_marche():
     st.title("📈 Tableau de Bord d'Indicateurs Financiers")
 
     with st.spinner("Chargement des données..."):
-        df_data = tdm_get_advanced_market_data(current_tickers)
+        df_data = tdm_get_advanced_market_data(current_tickers, show_entry_price)
 
-    if show_charts:
+    if show_charts and compare_mode:
+        if not compare_selection:
+            st.info("👈 Sélectionnez au moins un indice à comparer dans le menu latéral.")
+        else:
+            x_title = "Date" if show_ytd else "Heure"
+            titre_periode = "Comparaison de performance — Année en cours (YTD)" if show_ytd \
+                else "Comparaison de performance — Intraday"
+
+            with st.spinner("Chargement des données de comparaison..."):
+                data_dict = {}
+                for nom in compare_selection:
+                    sym = TDM_SYMBOL_MAP.get(nom)
+                    if not sym:
+                        continue
+                    data_dict[nom] = tdm_get_ytd_data(sym) if show_ytd else tdm_get_intraday_data(sym)
+
+            st.markdown(f"#### {titre_periode}")
+
+            kpi_cols = st.columns(len(compare_selection))
+            for col, nom in zip(kpi_cols, compare_selection):
+                df_i = data_dict.get(nom)
+                if df_i is not None and not df_i.empty:
+                    base = float(df_i['Close'].iloc[0])
+                    last = float(df_i['Close'].iloc[-1])
+                    pct = ((last - base) / base) * 100 if base else 0
+                    color = "#006622" if pct >= 0 else "#cc0000"
+                    with col:
+                        st.markdown(
+                            f"""<div style="text-align:center;">
+                                <div style="font-size:13px; font-weight:600;">{nom}</div>
+                                <div style="font-size:18px; font-weight:800; color:{color};">{pct:+.2f}%</div>
+                            </div>""",
+                            unsafe_allow_html=True
+                        )
+                else:
+                    with col:
+                        st.markdown(
+                            f"""<div style="text-align:center;">
+                                <div style="font-size:13px; font-weight:600;">{nom}</div>
+                                <div style="font-size:13px; color:#999;">N/A</div>
+                            </div>""",
+                            unsafe_allow_html=True
+                        )
+
+            fig_compare = _tdm_build_comparison_chart(
+                data_dict,
+                f"Comparaison d'indices — {titre_periode}",
+                x_title
+            )
+            st.plotly_chart(
+                fig_compare,
+                use_container_width=True,
+                config={
+                    'scrollZoom': True,
+                    'displayModeBar': True,
+                    'modeBarButtonsToAdd': ['drawline', 'drawrect', 'eraseshape'],
+                    'displaylogo': False
+                }
+            )
+
+    elif show_charts:
         target_symbol = TDM_SYMBOL_MAP.get(selected_index)
 
         if show_ytd:
@@ -2091,13 +2285,35 @@ def afficher_tableau_de_bord_marche():
                     style_df.loc[idx, 'Montant'] = 'color: #cc0000;'
             return style_df
 
+        def style_entry_opportunity(df):
+            """Style du nom de l'action selon les seuils d'entrée :
+            - gras si le Dernier Prix < Entrée BNA -15% (au moins cette opportunité est détectée) ;
+            - en plus, vert si le Dernier Prix < Entrée Conseillée ET < Entrée BNA -15%
+              (les deux confirment, signal renforcé)."""
+            style_df = pd.DataFrame('', index=df.index, columns=df.columns)
+            if {'EntreeConseillee_Raw', 'EntreeBNA_Raw', 'Dernier Prix'}.issubset(df.columns):
+                below_conseillee = df['EntreeConseillee_Raw'].notna() & (df['Dernier Prix'] < df['EntreeConseillee_Raw'])
+                below_bna = df['EntreeBNA_Raw'].notna() & (df['Dernier Prix'] < df['EntreeBNA_Raw'])
+
+                mask_double = below_conseillee & below_bna
+
+                style_df.loc[below_bna, 'Nom'] = 'font-weight: bold;'
+                style_df.loc[mask_double, 'Nom'] = 'color: #006622; font-weight: bold;'
+            return style_df
+
         df_styled = df_data.style\
             .map(style_market_colors, subset=['Var. Intraday (%)', 'Var. Session (%)', 'Var. YTD (%)'])\
             .apply(style_volume_amount_alerts, axis=None)\
-            .bar(subset=['Poids'], color='#4a90e2', vmin=0, vmax=float(df_data['Poids'].max()))\
-            .format({
+            .bar(subset=['Poids'], color='#4a90e2', vmin=0, vmax=float(df_data['Poids'].max()))
+
+        if show_entry_price:
+            df_styled = df_styled.apply(style_entry_opportunity, axis=None)
+
+        df_styled = df_styled.format({
                 'Prix Veille': '{:.2f}',
                 'Dernier Prix': '{:.2f}',
+                'Entrée Conseillée': '{:.2f}',
+                'Entrée BNA -15%': '{:.2f}',
                 'Var. Intraday (%)': '{:+.2f}%',
                 'Var. Session (%)': '{:+.2f}%',
                 'Poids': '{:.2f}%',
@@ -2117,8 +2333,16 @@ def afficher_tableau_de_bord_marche():
             "PER", "P/B", "Bénéfice TTM", "Rend. Dividende", "Dividende", "Actions en Circ.",
             "Bourse", "Dernier Horodatage"
         ]
+        if show_entry_price:
+            idx_insert = cols_to_display.index("Dernier Prix") + 1
+            cols_to_display.insert(idx_insert, "Entrée BNA -15%")
+            cols_to_display.insert(idx_insert, "Entrée Conseillée")
 
-        st.caption("💡 Cliquez sur une ligne pour afficher la fiche détaillée de l'action.")
+        caption_txt = "💡 Cliquez sur une ligne pour afficher la fiche détaillée de l'action."
+        if show_entry_price:
+            caption_txt += (" 🔤 Nom en gras si le dernier prix est inférieur à l'Entrée BNA -15% ; "
+                             "🟢 en plus en vert si l'Entrée Conseillée le confirme également.")
+        st.caption(caption_txt)
 
         sel_marche = st.dataframe(
             df_styled,
@@ -2221,6 +2445,46 @@ st.markdown("""
     [data-testid="stSidebarContent"] > div:first-child {padding-top: 1rem;}
     [data-testid='stTable'] {font-size: 13px;}
     .stVerticalBlock {gap: 0.5rem;}
+
+    /* --- Comparaison d'indices : présentation "pro" --- */
+    div[data-testid="stMultiSelect"] span[data-baseweb="tag"] {
+        background-color: #1f3a5f !important;
+        border-radius: 6px !important;
+        padding: 2px 4px !important;
+    }
+    div[data-testid="stMultiSelect"] span[data-baseweb="tag"] span {
+        color: #f5f7fa !important;
+        font-weight: 500 !important;
+        font-size: 12.5px !important;
+    }
+    div[data-testid="stMultiSelect"] span[data-baseweb="tag"] svg {
+        fill: #cbd5e1 !important;
+    }
+    .tdm-compare-card {
+        border: 1px solid #e2e8f0;
+        border-radius: 10px;
+        padding: 14px 14px 10px 14px;
+        background-color: #fafbfc;
+        margin-bottom: 4px;
+    }
+    .tdm-compare-title {
+        font-size: 14px;
+        font-weight: 700;
+        color: #1f3a5f;
+        margin-bottom: 6px;
+    }
+    div[data-testid="stSidebar"] div[data-testid="stButton"] button {
+        font-size: 12px !important;
+        padding: 2px 8px !important;
+        border-radius: 14px !important;
+        border: 1px solid #cbd5e1 !important;
+        background-color: #ffffff !important;
+        color: #334155 !important;
+    }
+    div[data-testid="stSidebar"] div[data-testid="stButton"] button:hover {
+        border-color: #1f3a5f !important;
+        color: #1f3a5f !important;
+    }
     </style>
 """, unsafe_allow_html=True)
 
