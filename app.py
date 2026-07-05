@@ -862,17 +862,18 @@ def afficher_detail_action(d):
                     y=prix_actuel, text=f"  {prix_actuel:.2f}",
                     showarrow=False, font=dict(color="gray", size=11)
                 )
-                fig.add_shape(
-                    type="line", xref="paper", x0=0, x1=1,
-                    yref="y2", y0=prix_actuel * 0.85, y1=prix_actuel * 0.85,
-                    line=dict(color="#28a745", dash="dot", width=1.5)
-                )
-                fig.add_annotation(
-                    xref="paper", x=0, yref="y2",
-                    y=prix_actuel * 0.85, text="Zone achat (-15%)  ",
-                    showarrow=False, xanchor="right",
-                    font=dict(color="#28a745", size=10)
-                )
+                if fd.get('val_bna', 0) and fd['val_bna'] > 0:
+                    fig.add_shape(
+                        type="line", xref="paper", x0=0, x1=1,
+                        yref="y2", y0=fd['val_bna'] * 0.85, y1=fd['val_bna'] * 0.85,
+                        line=dict(color="#28a745", dash="dot", width=1.5)
+                    )
+                    fig.add_annotation(
+                        xref="paper", x=0, yref="y2",
+                        y=fd['val_bna'] * 0.85, text="Entrée BNA -15%  ",
+                        showarrow=False, xanchor="right",
+                        font=dict(color="#28a745", size=10)
+                    )
 
                 # ---- Row 2 : Indicateur ----
                 if indicateur_choisi == "RSI":
@@ -2072,7 +2073,7 @@ def afficher_tableau_de_bord_marche():
         help="Basculer le graphique en données journalières depuis le 1er janvier, au lieu de l'intraday"
     )
     show_entry_price = st.sidebar.checkbox(
-        "💰 Afficher l'entrée conseillée (-15%)",
+        "💰 Afficher prix conseillé",
         value=False,
         key="tdm_show_entry_price",
         help="Calcule un prix d'entrée théorique par valeur (moyenne des modèles BNA/FCF/Analystes -15%). "
@@ -2287,9 +2288,9 @@ def afficher_tableau_de_bord_marche():
 
         def style_entry_opportunity(df):
             """Style du nom de l'action selon les seuils d'entrée :
-            - gras si le Dernier Prix < Entrée BNA -15% (au moins cette opportunité est détectée) ;
-            - en plus, vert si le Dernier Prix < Entrée Conseillée ET < Entrée BNA -15%
-              (les deux confirment, signal renforcé)."""
+            - vert + gras si le Dernier Prix < Entrée Conseillée ;
+            - en plus, fond vert clair (signal renforcé) si le Dernier Prix < Entrée Conseillée
+              ET < Entrée BNA -15% (les deux confirment)."""
             style_df = pd.DataFrame('', index=df.index, columns=df.columns)
             if {'EntreeConseillee_Raw', 'EntreeBNA_Raw', 'Dernier Prix'}.issubset(df.columns):
                 below_conseillee = df['EntreeConseillee_Raw'].notna() & (df['Dernier Prix'] < df['EntreeConseillee_Raw'])
@@ -2297,8 +2298,10 @@ def afficher_tableau_de_bord_marche():
 
                 mask_double = below_conseillee & below_bna
 
-                style_df.loc[below_bna, 'Nom'] = 'font-weight: bold;'
-                style_df.loc[mask_double, 'Nom'] = 'color: #006622; font-weight: bold;'
+                style_df.loc[below_conseillee, 'Nom'] = 'color: #28a745; font-weight: bold;'
+                style_df.loc[mask_double, 'Nom'] = (
+                    'color: #28a745; font-weight: bold; background-color: #e6ffec;'
+                )
             return style_df
 
         df_styled = df_data.style\
@@ -2340,8 +2343,8 @@ def afficher_tableau_de_bord_marche():
 
         caption_txt = "💡 Cliquez sur une ligne pour afficher la fiche détaillée de l'action."
         if show_entry_price:
-            caption_txt += (" 🔤 Nom en gras si le dernier prix est inférieur à l'Entrée BNA -15% ; "
-                             "🟢 en plus en vert si l'Entrée Conseillée le confirme également.")
+            caption_txt += (" 🟢 Nom en vert et gras si le dernier prix est inférieur à l'Entrée Conseillée ; "
+                             "en plus surligné en vert clair si l'Entrée BNA -15% le confirme également.")
         st.caption(caption_txt)
 
         sel_marche = st.dataframe(
