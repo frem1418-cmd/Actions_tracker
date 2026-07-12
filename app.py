@@ -430,6 +430,90 @@ def calculate_piotroski_advanced(stock):
         return "N/A", {}
 
 
+def calc_per_historique_moyen(ticker_obj, years=5):
+    """
+    PER moyen historique "normalisé", robuste à une année de BNA quasi nul et aux
+    incohérences de splits.
+
+    Méthode :
+      1. Pour chaque exercice, prix = moyenne des clôtures sur une fenêtre de +/-10 jours
+         de bourse autour de la date de fin d'exercice (plutôt qu'un seul jour, pour lisser
+         un pic/krach ponctuel ce jour précis).
+      2. Prix NON ajustés des splits (auto_adjust=False) : les BNA historiques de Yahoo ne
+         sont pas rétroactivement ajustés des splits ultérieurs, contrairement aux prix
+         ajustés renvoyés par défaut par yfinance. Utiliser des prix ajustés alors que le
+         BNA ne l'est pas fausse complètement le PER pour toute valeur ayant fait un split
+         depuis l'exercice concerné.
+      3. Exercices écartés si leur BNA s'éloigne trop (facteur x3) de la médiane des BNA
+         des exercices disponibles -> ignore une année exceptionnelle (résultat quasi nul
+         ou gain one-off).
+      4. PER final = (somme des prix retenus) / (somme des BNA retenus), et NON la moyenne
+         des PER individuels. Cette pondération par le BNA ("normalisation façon Graham")
+         est beaucoup plus robuste qu'une moyenne de ratios : une année à BNA quasi nul ne
+         peut plus faire exploser le résultat, car son poids dans la somme reste
+         proportionnel à son poids réel au lieu d'être démultiplié par une division par un
+         nombre proche de zéro.
+      5. Garde-fou final : résultat hors de [3 ; 80] -> jugé non représentatif -> None.
+    """
+    try:
+        fin = ticker_obj.financials
+        if fin is None or fin.empty:
+            return None
+
+        eps_row = None
+        for label in ["Diluted EPS", "Basic EPS"]:
+            if label in fin.index:
+                eps_row = fin.loc[label].dropna()
+                break
+        if eps_row is None or eps_row.empty:
+            return None
+
+        eps_row = eps_row.head(years)
+        eps_vals_pos = sorted(v for v in eps_row if v is not None and not pd.isna(v) and v > 0)
+        if len(eps_vals_pos) < 2:
+            return None
+        eps_median = eps_vals_pos[len(eps_vals_pos) // 2]
+
+        pairs = []  # (prix_moyen_fenetre, bna_exercice)
+        for date, eps_val in eps_row.items():
+            if eps_val is None or pd.isna(eps_val) or eps_val <= 0:
+                continue
+            # Ecarte les exercices avec un BNA trop atypique (facteur x3 vs médiane)
+            if eps_median > 0 and not (eps_median / 3 <= eps_val <= eps_median * 3):
+                continue
+            try:
+                start = (date - timedelta(days=20)).strftime("%Y-%m-%d")
+                end   = (date + timedelta(days=20)).strftime("%Y-%m-%d")
+                h = ticker_obj.history(start=start, end=end, auto_adjust=False)
+                if h.empty:
+                    continue
+                h.index = h.index.tz_localize(None)
+                target = pd.Timestamp(date).tz_localize(None)
+                idx_pos = h.index.get_indexer([target], method="nearest")[0]
+                lo, hi = max(0, idx_pos - 10), min(len(h), idx_pos + 11)
+                avg_price = h['Close'].iloc[lo:hi].mean()
+                if avg_price and avg_price > 0 and not pd.isna(avg_price):
+                    pairs.append((float(avg_price), float(eps_val)))
+            except Exception:
+                continue
+
+        if len(pairs) < 2:
+            return None
+
+        total_price = sum(p for p, _ in pairs)
+        total_eps   = sum(e for _, e in pairs)
+        if total_eps <= 0:
+            return None
+
+        result = total_price / total_eps
+
+        if result <= 3 or result > 80:
+            return None
+        return round(result, 2)
+    except Exception:
+        return None
+
+
 @st.cache_data(ttl=3600)
 def fetch_stock_data(ticker_str):
     yf.set_tz_cache_location("/tmp")
@@ -440,7 +524,41 @@ def fetch_stock_data(ticker_str):
         if p is None: return None
 
         ef, pf = info.get("forwardEps", 0), info.get("forwardPE", 15)
-        vb     = ef * pf
+        trailing_eps_raw = info.get("trailingEps") or 0
+        trailing_pe_raw  = info.get("trailingPE")
+
+        # PER utilisé pour la valorisation "BNA Forward" : on utilise en priorité le PER
+        # Actuel de Yahoo (trailingPE), une donnée unique et fiable, déjà cohérente en
+        # échelle/devise avec le prix actuel. Le PER historique reconstruit à partir des
+        # données brutes (financials + historique de prix) s'est révélé fragile sur
+        # certains titres (dates mal alignées, splits, données ponctuelles aberrantes) et
+        # n'est donc utilisé qu'en repli secondaire, si le PER Actuel est indisponible ou
+        # hors plage plausible. Dernier repli : PER Forward, puis 15 par défaut.
+        per_hist_moy = None
+        if trailing_pe_raw and 5 <= trailing_pe_raw <= 60:
+            pf_valo = trailing_pe_raw
+            per_source = "PER Actuel"
+        else:
+            per_hist_moy = calc_per_historique_moyen(s, years=5)
+            if per_hist_moy and per_hist_moy > 0:
+                pf_valo = per_hist_moy
+                per_source = "PER Historique Moyen"
+            elif pf and 3 < pf <= 80:
+                pf_valo = pf
+                per_source = "PER Forward (repli)"
+            else:
+                pf_valo = 15
+                per_source = "Défaut 15 (repli)"
+
+        # Plafond sur le BNA Forward utilisé : si le consensus prévoit plus de +50% de
+        # croissance du bénéfice par rapport au BNA actuel, on plafonne à +50% pour le
+        # calcul du "Juste Prix", pour éviter qu'un BNA actuel anormalement déprimé (donc
+        # un BNA Forward mécaniquement très supérieur) ne fasse exploser la valorisation.
+        ef_valo = ef
+        if trailing_eps_raw and trailing_eps_raw > 0 and ef and ef > trailing_eps_raw * 1.5:
+            ef_valo = trailing_eps_raw * 1.5
+
+        vb      = ef_valo * pf_valo
         tm     = info.get("targetMeanPrice", 0)
         sh     = info.get("sharesOutstanding", 1)
 
@@ -602,6 +720,7 @@ def fetch_stock_data(ticker_str):
             "Prix Actuel": p,
             "BNA Actuel": trailing_eps,
             "PER Actuel": trailing_pe,
+            "Source PER (BNA)": per_source,
             "PEG Actuel": round(peg_actuel, 2) if peg_actuel else None,
             "PEG Forward": round(peg_forward, 2) if peg_forward else None,
             "ROA": pct_fmt(roa),
@@ -637,7 +756,8 @@ def fetch_stock_data(ticker_str):
             "full_data": {
                 "val_bna": vb, "val_fcf": vf, "target_mean": tm, "fair_avg": avg,
                 "currency": info.get("currency", "EUR"),
-                "eps_fwd": ef, "per_fwd": pf,
+                "eps_fwd": ef, "eps_fwd_valo": ef_valo, "per_fwd": pf, "per_valo_bna": pf_valo,
+                "per_hist_moy": per_hist_moy, "per_source": per_source,
                 "fcf_ps": fcf_raw / sh if sh > 0 else 0,
                 "num_analysts": info.get("numberOfAnalystOpinions", 0)
             }
@@ -1070,7 +1190,10 @@ def afficher_detail_action(d):
         st.divider()
         st.subheader("🏆 Modèles de Valorisation")
         v_configs = [
-            ("1️⃣ Modèle BNA (Forward)", fd['val_bna'], f"BNA Fwd ({clean_num(fd['eps_fwd'])}) × PER Fwd ({fd['per_fwd']})"),
+            ("1️⃣ Modèle BNA (Forward)", fd['val_bna'],
+             (f"BNA Fwd ({clean_num(fd['eps_fwd_valo'])}"
+              + (" plafonné à +50%" if fd['eps_fwd_valo'] != fd['eps_fwd'] else "")
+              + f") × {fd['per_source']} ({clean_num(fd['per_valo_bna'])})")),
             ("2️⃣ Modèle FCF (Moyen)",   fd['val_fcf'], f"(FCF/Action {clean_num(fd['fcf_ps'])}) × 1.05 × PER Fwd"),
             ("3️⃣ Analystes",             fd['target_mean'], f"Moyenne de {fd['num_analysts']} opinions")
         ]
@@ -1996,7 +2119,28 @@ def tdm_get_advanced_market_data(tickers, compute_entry_price=False):
                 try:
                     ef = info.get('forwardEps') or 0
                     pf = info.get('forwardPE') or 15
-                    vb = ef * pf if ef else 0
+                    trailing_eps_row = info.get('trailingEps') or 0
+                    trailing_pe_row  = info.get('trailingPE')
+
+                    # PER Actuel en priorité (fiable), PER historique reconstruit en repli
+                    # secondaire seulement (cf. calc_per_historique_moyen, fragile sur
+                    # certains titres).
+                    if trailing_pe_row and 5 <= trailing_pe_row <= 60:
+                        pf_valo = trailing_pe_row
+                    else:
+                        per_hist_moy_row = calc_per_historique_moyen(ticker_obj, years=5)
+                        if per_hist_moy_row and per_hist_moy_row > 0:
+                            pf_valo = per_hist_moy_row
+                        elif pf and 3 < pf <= 80:
+                            pf_valo = pf
+                        else:
+                            pf_valo = 15
+
+                    ef_valo = ef
+                    if trailing_eps_row and trailing_eps_row > 0 and ef and ef > trailing_eps_row * 1.5:
+                        ef_valo = trailing_eps_row * 1.5
+
+                    vb = ef_valo * pf_valo if ef_valo else 0
                     entree_bna = vb * 0.85 if vb > 0 else np.nan
 
                     tm = info.get('targetMeanPrice') or 0
@@ -2671,7 +2815,7 @@ with st.sidebar:
         "ROA", "ROE", "Marge Nette", "Dette/Equity", "Beta",
         "Croissance EBITDA", "P/FCF", "P/FCF Moy 3a",   # NOUVEAU
         "CAGR 3 ans", "CAGR 5 ans",
-        "Entrée BNA -15%", "Entrée FCF -15%", "Entrée Analystes -15%", "Entrée Synthèse (-15%)",
+        "Entrée BNA -15%", "Source PER (BNA)", "Entrée FCF -15%", "Entrée Analystes -15%", "Entrée Synthèse (-15%)",
         "Santé (Piotroski)",
         "Chg 1J", "Chg 1M", "Chg YTD",
         "Nb Analystes", "Dividende (€/$)", "Rendement %", "Date Détachement",
