@@ -550,12 +550,24 @@ def fetch_stock_data(ticker_str):
                 pf_valo = 15
                 per_source = "Défaut 15 (repli)"
 
-        # Plafond sur le BNA Forward utilisé : si le consensus prévoit plus de +50% de
-        # croissance du bénéfice par rapport au BNA actuel, on plafonne à +50% pour le
-        # calcul du "Juste Prix", pour éviter qu'un BNA actuel anormalement déprimé (donc
-        # un BNA Forward mécaniquement très supérieur) ne fasse exploser la valorisation.
-        ef_valo = ef
-        if trailing_eps_raw and trailing_eps_raw > 0 and ef and ef > trailing_eps_raw * 1.5:
+        # Pondération BNA Forward / BNA Actuel : le consensus des analystes (BNA Forward)
+        # est réputé structurellement optimiste (les études montrent une tendance
+        # récurrente à la surestimation de la croissance à 1 an). Pour un "Juste Prix"
+        # prudent, on ne prend le consensus qu'à hauteur de 30%, en pondérant à 70% le BNA
+        # Actuel réellement constaté. Si le BNA Actuel n'est pas disponible (ex: perte
+        # ponctuelle), on retombe sur 100% BNA Forward, faute de mieux.
+        BNA_POIDS_FORWARD = 0.30
+        BNA_POIDS_ACTUEL  = 0.70
+        if trailing_eps_raw and trailing_eps_raw > 0 and ef:
+            ef_pondere = (ef * BNA_POIDS_FORWARD) + (trailing_eps_raw * BNA_POIDS_ACTUEL)
+        else:
+            ef_pondere = ef
+
+        # Plafond de sécurité supplémentaire : même après pondération, si le résultat
+        # dépasse le BNA Actuel de plus de 50%, on plafonne à +50% (garde-fou en cas de
+        # BNA Actuel anormalement déprimé).
+        ef_valo = ef_pondere
+        if trailing_eps_raw and trailing_eps_raw > 0 and ef_pondere and ef_pondere > trailing_eps_raw * 1.5:
             ef_valo = trailing_eps_raw * 1.5
 
         vb      = ef_valo * pf_valo
@@ -1191,7 +1203,7 @@ def afficher_detail_action(d):
         st.subheader("🏆 Modèles de Valorisation")
         v_configs = [
             ("1️⃣ Modèle BNA (Forward)", fd['val_bna'],
-             (f"BNA Fwd ({clean_num(fd['eps_fwd_valo'])}"
+             (f"BNA Pondéré 30% Fwd/70% Actuel ({clean_num(fd['eps_fwd_valo'])}"
               + (" plafonné à +50%" if fd['eps_fwd_valo'] != fd['eps_fwd'] else "")
               + f") × {fd['per_source']} ({clean_num(fd['per_valo_bna'])})")),
             ("2️⃣ Modèle FCF (Moyen)",   fd['val_fcf'], f"(FCF/Action {clean_num(fd['fcf_ps'])}) × 1.05 × PER Fwd"),
@@ -2083,9 +2095,24 @@ def tdm_get_advanced_market_data(tickers, compute_entry_price=False):
             if close_series.empty: continue
 
             p_ytd_start = float(close_series.iloc[0])
-            p_prev_close = float(close_series.iloc[-2]) if len(close_series) > 1 else float(close_series.iloc[-1])
-            p_latest = float(close_series.iloc[-1])
-            p_open_today = float(open_series.iloc[-1]) if not open_series.empty else p_latest
+
+            # Prix live (même source que la page Portefeuille, cf. fetch_stock_data) plutôt
+            # que la bougie du jour issue de yf.download, qui peut accuser un retard d'une
+            # session complète et donc désynchroniser "Var. Intraday" entre les deux pages.
+            live_price = info.get("currentPrice") or info.get("regularMarketPrice")
+            p_latest = float(live_price) if live_price else float(close_series.iloc[-1])
+
+            prev_close_live = info.get("previousClose")
+            if prev_close_live:
+                p_prev_close = float(prev_close_live)
+            else:
+                p_prev_close = float(close_series.iloc[-2]) if len(close_series) > 1 else p_latest
+
+            open_today_live = info.get("regularMarketOpen")
+            if open_today_live:
+                p_open_today = float(open_today_live)
+            else:
+                p_open_today = float(open_series.iloc[-1]) if not open_series.empty else p_latest
 
             volume_actuel = int(vol_series.iloc[-1]) if not vol_series.empty else 0
             volume_moyen = vol_series.mean() if not vol_series.empty else 0
@@ -2136,8 +2163,15 @@ def tdm_get_advanced_market_data(tickers, compute_entry_price=False):
                         else:
                             pf_valo = 15
 
-                    ef_valo = ef
-                    if trailing_eps_row and trailing_eps_row > 0 and ef and ef > trailing_eps_row * 1.5:
+                    # Pondération BNA Forward (30%) / BNA Actuel (70%) : cf. fetch_stock_data
+                    # pour la justification (consensus analystes réputé optimiste).
+                    if trailing_eps_row and trailing_eps_row > 0 and ef:
+                        ef_pondere = (ef * 0.30) + (trailing_eps_row * 0.70)
+                    else:
+                        ef_pondere = ef
+
+                    ef_valo = ef_pondere
+                    if trailing_eps_row and trailing_eps_row > 0 and ef_pondere and ef_pondere > trailing_eps_row * 1.5:
                         ef_valo = trailing_eps_row * 1.5
 
                     vb = ef_valo * pf_valo if ef_valo else 0
