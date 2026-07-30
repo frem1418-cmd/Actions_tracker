@@ -581,14 +581,29 @@ def fetch_stock_data(ticker_str):
         p_s, p_d = calculate_piotroski_advanced(s)
 
         current_year = datetime.now().year
-        hist = s.history(start=f"{current_year}-01-01")
+        hist = s.history(start=f"{current_year}-01-01", auto_adjust=False)
 
-        perf_1j = perf_1m = perf_ytd = 0
+        perf_1j = perf_1m = perf_ytd = perf_ytd_total = 0
         if len(hist) >= 2:
             c_veille      = hist['Close'].iloc[-2]
             c_debut_annee = hist['Close'].iloc[0]
             perf_1j  = ((p - c_veille) / c_veille) * 100
             perf_ytd = ((p - c_debut_annee) / c_debut_annee) * 100
+
+            # Rendement total YTD = variation de cours + dividendes détachés depuis le 1er janvier
+            try:
+                div_series = s.dividends
+                if div_series is not None and not div_series.empty:
+                    start_ts = pd.Timestamp(f"{current_year}-01-01")
+                    if div_series.index.tz is not None:
+                        start_ts = start_ts.tz_localize(div_series.index.tz)
+                    dividends_ytd = float(div_series[div_series.index >= start_ts].sum())
+                else:
+                    dividends_ytd = 0.0
+            except Exception:
+                dividends_ytd = 0.0
+            perf_ytd_total = ((p + dividends_ytd - c_debut_annee) / c_debut_annee) * 100
+
             if len(hist) >= 20:
                 perf_1m = ((p - hist['Close'].iloc[-20]) / hist['Close'].iloc[-20]) * 100
             else:
@@ -747,6 +762,7 @@ def fetch_stock_data(ticker_str):
             "CAGR 5 ans": fmt_pct(cagr_5y),
             "Chg 1J": perf_1j,
             "Chg YTD": perf_ytd,
+            "Chg YTD (div. incl.)": perf_ytd_total,
             "Chg 1M": perf_1m,
             "currency": sym,
             "BNA Forward": ef,
@@ -2073,7 +2089,7 @@ def tdm_get_previous_close(ticker_symbol, fallback):
 
 @st.cache_data(ttl=300)
 def tdm_get_advanced_market_data(tickers, compute_entry_price=False):
-    df_prices = yf.download(tickers, start="2026-01-01", progress=False)
+    df_prices = yf.download(tickers, start="2026-01-01", progress=False, auto_adjust=False)
     if isinstance(df_prices.columns, pd.MultiIndex):
         df_prices.columns = df_prices.columns.remove_unused_levels()
 
@@ -2135,6 +2151,19 @@ def tdm_get_advanced_market_data(tickers, compute_entry_price=False):
                     dividend_yield = div_yield_raw if div_yield_raw > 1.0 else div_yield_raw * 100
                 else:
                     dividend_yield = np.nan
+
+            # Dividendes détachés depuis le 1er janvier, pour le rendement total YTD
+            try:
+                div_series = ticker_obj.dividends
+                if div_series is not None and not div_series.empty:
+                    start_ts_div = pd.Timestamp("2026-01-01")
+                    if div_series.index.tz is not None:
+                        start_ts_div = start_ts_div.tz_localize(div_series.index.tz)
+                    dividends_ytd = float(div_series[div_series.index >= start_ts_div].sum())
+                else:
+                    dividends_ytd = 0.0
+            except Exception:
+                dividends_ytd = 0.0
 
             # --- Entrée conseillée (-15%) : même logique que la fiche détaillée
             # (moyenne des modèles BNA Forward / FCF / Cible Analystes, puis -15%) ---
@@ -2212,6 +2241,7 @@ def tdm_get_advanced_market_data(tickers, compute_entry_price=False):
 
                 "MarketCap_Raw": info.get('marketCap', 0),
                 "YTDReturn": ((p_latest - p_ytd_start) / p_ytd_start) * 100,
+                "YTDReturnTotal": ((p_latest + dividends_ytd - p_ytd_start) / p_ytd_start) * 100,
                 "PE": info.get('trailingPE', np.nan),
                 "PB": info.get('priceToBook', np.nan),
                 "Profit_TTM": _tdm_format_billions(info.get('netIncomeToCommon', np.nan)),
@@ -2245,7 +2275,7 @@ def tdm_get_advanced_market_data(tickers, compute_entry_price=False):
     ordered_cols = [
         "Ticker", "Name", "Weight", "Price", "IntradayReturn", "Price_Latest",
         "EntreeConseillee", "EntreeBNA", "Return_Latest", "Volume", "VolumeMoyen", "Amount", "AmountMoyen",
-        "IntradayContribution", "MarketCap", "YTDReturn", "YTDContribution", "PE", "PB", "Profit_TTM",
+        "IntradayContribution", "MarketCap", "YTDReturn", "YTDReturnTotal", "YTDContribution", "PE", "PB", "Profit_TTM",
         "DividendYield", "Dividend", "SharesOutstanding", "Exchange", "Timestamp_Latest",
         "Volume_Raw", "Volume_Moyen_Raw", "Amount_Raw", "Amount_Moyen_Raw",
         "EntreeConseillee_Raw", "EntreeBNA_Raw"
@@ -2262,7 +2292,7 @@ def tdm_get_advanced_market_data(tickers, compute_entry_price=False):
         "Amount": "Montant", "AmountMoyen": "Montant Moyen",
         "IntradayContribution": "Influence Intraday",
         "MarketCap": "Capitalisation",
-        "YTDReturn": "Var. YTD (%)", "YTDContribution": "Contrib. YTD", "PE": "PER",
+        "YTDReturn": "Var. YTD (%)", "YTDReturnTotal": "Var. YTD Totale, div. incl. (%)", "YTDContribution": "Contrib. YTD", "PE": "PER",
         "PB": "P/B", "Profit_TTM": "Bénéfice TTM", "DividendYield": "Rend. Dividende",
         "Dividend": "Dividende", "SharesOutstanding": "Actions en Circ.",
         "Exchange": "Bourse", "Timestamp_Latest": "Dernier Horodatage",
@@ -2521,7 +2551,7 @@ def afficher_tableau_de_bord_marche():
             return style_df
 
         df_styled = df_data.style\
-            .map(style_market_colors, subset=['Var. Intraday (%)', 'Var. Session (%)', 'Var. YTD (%)'])\
+            .map(style_market_colors, subset=['Var. Intraday (%)', 'Var. Session (%)', 'Var. YTD (%)', 'Var. YTD Totale, div. incl. (%)'])\
             .apply(style_volume_amount_alerts, axis=None)\
             .bar(subset=['Poids'], color='#4a90e2', vmin=0, vmax=float(df_data['Poids'].max()))
 
@@ -2538,6 +2568,7 @@ def afficher_tableau_de_bord_marche():
                 'Poids': '{:.2f}%',
                 'Influ. Intraday': '{:+.2f}%',
                 'Var. YTD (%)': '{:+.2f}%',
+                'Var. YTD Totale, div. incl. (%)': '{:+.2f}%',
                 'Influ. YTD': '{:+.2f}%',
                 'PER': '{:.2f}',
                 'P/B': '{:.2f}',
@@ -2548,7 +2579,7 @@ def afficher_tableau_de_bord_marche():
         cols_to_display = [
             "Ticker", "Nom", "Poids", "Prix Veille", "Var. Intraday (%)", "Dernier Prix",
             "Var. Session (%)", "Volume", "Volume Moyen", "Montant", "Montant Moyen",
-            "Influence Intraday", "Capitalisation", "Var. YTD (%)", "Contrib. YTD",
+            "Influence Intraday", "Capitalisation", "Var. YTD (%)", "Var. YTD Totale, div. incl. (%)", "Contrib. YTD",
             "PER", "P/B", "Bénéfice TTM", "Rend. Dividende", "Dividende", "Actions en Circ.",
             "Bourse", "Dernier Horodatage"
         ]
@@ -2851,7 +2882,7 @@ with st.sidebar:
         "CAGR 3 ans", "CAGR 5 ans",
         "Entrée BNA -15%", "Source PER (BNA)", "Entrée FCF -15%", "Entrée Analystes -15%", "Entrée Synthèse (-15%)",
         "Santé (Piotroski)",
-        "Chg 1J", "Chg 1M", "Chg YTD",
+        "Chg 1J", "Chg 1M", "Chg YTD", "Chg YTD (div. incl.)",
         "Nb Analystes", "Dividende (€/$)", "Rendement %", "Date Détachement",
         "Date Versement Dividende", "Prochains Résultats", "Avis Analystes"
     ]
@@ -3039,7 +3070,7 @@ if t_list:
                     except:
                         pass
 
-            for col in ['Chg 1J', 'Chg 1M', 'Chg YTD']:
+            for col in ['Chg 1J', 'Chg 1M', 'Chg YTD', 'Chg YTD (div. incl.)']:
                 if col in df.columns:
                     col_num = pd.to_numeric(df[col], errors='coerce')
                     mask_plus  = col_num > 0
@@ -3083,7 +3114,7 @@ if t_list:
                     return "N/A"
                 return f"{'📈' if x > 0 else '📉'} {x:+.2f}%"
 
-            chg_cols_present = [c for c in ['Chg 1J', 'Chg 1M', 'Chg YTD'] if c in selection_finale]
+            chg_cols_present = [c for c in ['Chg 1J', 'Chg 1M', 'Chg YTD', 'Chg YTD (div. incl.)'] if c in selection_finale]
 
             sel = st.dataframe(
                 df[selection_finale].style.apply(style_df, axis=None).format(
