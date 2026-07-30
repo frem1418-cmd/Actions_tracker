@@ -745,9 +745,9 @@ def fetch_stock_data(ticker_str):
             "P/FCF Moy 3a": fmt_ratio(p_fcf_moy),   # NOUVEAU
             "CAGR 3 ans": fmt_pct(cagr_3y),
             "CAGR 5 ans": fmt_pct(cagr_5y),
-            "Chg 1J": fmt_p(perf_1j),
-            "Chg YTD": fmt_p(perf_ytd),
-            "Chg 1M": fmt_p(perf_1m),
+            "Chg 1J": perf_1j,
+            "Chg YTD": perf_ytd,
+            "Chg 1M": perf_1m,
             "currency": sym,
             "BNA Forward": ef,
             "PER Forward": pf,
@@ -3041,8 +3041,9 @@ if t_list:
 
             for col in ['Chg 1J', 'Chg 1M', 'Chg YTD']:
                 if col in df.columns:
-                    mask_plus  = df[col].astype(str).str.contains(r'\+')
-                    mask_moins = df[col].astype(str).str.contains('-')
+                    col_num = pd.to_numeric(df[col], errors='coerce')
+                    mask_plus  = col_num > 0
+                    mask_moins = col_num < 0
                     styles.loc[mask_plus,  col] += 'color: #28a745; font-weight: bold;'
                     styles.loc[mask_moins, col] += 'color: #dc3545; font-weight: bold;'
 
@@ -3077,9 +3078,18 @@ if t_list:
                 )
 
             hauteur_dynamique = (len(df) * 35) + 38
+            def _fmt_chg(x):
+                if x is None or (isinstance(x, float) and pd.isna(x)):
+                    return "N/A"
+                return f"{'📈' if x > 0 else '📉'} {x:+.2f}%"
+
+            chg_cols_present = [c for c in ['Chg 1J', 'Chg 1M', 'Chg YTD'] if c in selection_finale]
+
             sel = st.dataframe(
                 df[selection_finale].style.apply(style_df, axis=None).format(
                     formatter=lambda x: clean_num(x) if isinstance(x, (int, float)) else x
+                ).format(
+                    formatter=_fmt_chg, subset=chg_cols_present
                 ),
                 on_select="rerun",
                 selection_mode="single-row",
