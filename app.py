@@ -2393,7 +2393,8 @@ def afficher_tableau_de_bord_marche():
         help="Convertit Prix / Montant / Capitalisation / Dividende / Bénéfice dans la devise locale de "
              "cotation de chaque titre (par défaut, une colonne 'Devise' l'indique) vers l'euro, au taux de "
              "change actuel — utile pour comparer des indices cotés dans des devises différentes (ex. NIFTY 50 "
-             "en roupies, Nikkei en yens).     )
+             "en roupies, Nikkei en yens). 
+    )
 
     index_daily_changes = tdm_get_index_daily_changes()
 
