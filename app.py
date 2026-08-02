@@ -2625,15 +2625,15 @@ def afficher_tableau_de_bord_marche():
 
                 mask_double = below_conseillee & below_bna
 
-                style_df.loc[below_conseillee, 'Nom'] = 'color: #28a745;'
+                style_df.loc[below_conseillee, 'Nom'] = 'color: #28a745; font-weight: bold;'
                 style_df.loc[mask_double, 'Nom'] = (
                     'color: #28a745; font-weight: bold; background-color: #e6ffec;'
                 )
 
                 # Colore la valeur elle-même dans les colonnes "Entrée Conseillée" / "Entrée BNA -15%"
                 # si elle est supérieure au Dernier Prix.
-                style_df.loc[below_conseillee, conseillee_col] = 'color: #28a745; font-weight: bold;'
-                style_df.loc[below_bna, bna_col] = 'color: #28a745; font-weight: bold;'
+                style_df.loc[below_conseillee, conseillee_col] = 'color: #28a745;'
+                style_df.loc[below_bna, bna_col] = 'color: #28a745;'
             return style_df
 
         df_styled = df_data.style\
@@ -2893,13 +2893,42 @@ st.markdown("""
 with st.sidebar:
     page_actuelle = st.radio(
         "🧭 Navigation",
-        ["📁 Portefeuille", "🌍 Indices", "📰 Actualités"],
+        ["📁 Portefeuille", "🌍 Indices", "📰 Actualités", "🔎 Recherche"],
         index=2,
         key="page_actuelle",
     )
     st.divider()
 
 show_news_portfolio = (page_actuelle == "📰 Actualités")
+
+# =======================================================================
+# PAGE : RECHERCHE UNITAIRE D'UNE ACTION
+# =======================================================================
+if page_actuelle == "🔎 Recherche":
+    st.header("🔎 Recherche unitaire d'une action")
+    st.caption("Recherchez une valeur pour retrouver sa fiche détaillée (diagnostic santé financière, "
+               "performance & volumes, entrée conseillée, actualités) sans avoir à l'ajouter à un portefeuille.")
+
+    rq = st.text_input("Nom de la société ou ticker (ex: Brenntag, BNR.DE, LVMH)", key="recherche_unitaire_q")
+
+    if rq:
+        rsug = search_ticker(rq)
+        if rsug:
+            ropt = [x['label'] for x in rsug]
+            rsel_opt = st.selectbox("Résultats :", ropt, key="recherche_unitaire_sel")
+            r_ticker = rsug[ropt.index(rsel_opt)]['symbol']
+
+            with st.spinner(f"Analyse détaillée de {r_ticker}..."):
+                r_detail = fetch_stock_data(r_ticker)
+
+            st.divider()
+            if r_detail:
+                afficher_detail_action(r_detail)
+            else:
+                st.info("Données fondamentales indisponibles pour cette valeur.")
+        else:
+            st.warning("Aucun résultat trouvé pour cette recherche.")
+    st.stop()
 
 # =======================================================================
 # PAGE : TABLEAU DE BORD MARCHÉ
