@@ -886,6 +886,15 @@ def afficher_detail_action(d):
                 date_affichage = "1985-01-01"
 
             h_data_large = s_obj.history(start=date_calcul)
+            if not h_data_large.empty:
+                # Le Close du dernier jour peut arriver en retard chez Yahoo alors que le
+                # Volume est déjà disponible : on le complète avec le prix actuel plutôt
+                # que de supprimer la ligne (ce qui effacerait aussi le volume du jour).
+                if pd.isna(h_data_large['Close'].iloc[-1]) and d.get('Prix Actuel'):
+                    h_data_large.loc[h_data_large.index[-1], 'Close'] = d['Prix Actuel']
+                # On ne retire que les lignes réellement vides (ni Close ni Volume) :
+                # weekends / jours fériés remontés par erreur.
+                h_data_large = h_data_large[h_data_large['Close'].notna() | h_data_large['Volume'].notna()]
 
             # --- Historique P/FCF annuel (calculé une fois, avant les subplots) ---
             pfcf_hist_data = {}
@@ -964,7 +973,8 @@ def afficher_detail_action(d):
                 # Row 1 : Prix (axe droit)
                 fig.add_trace(go.Scatter(
                     x=h_data.index, y=h_data['Close'],
-                    name="Prix", line=dict(color='#1a73e8', width=2)
+                    name="Prix", line=dict(color='#1a73e8', width=2),
+                    connectgaps=True
                 ), row=1, col=1, secondary_y=True)
 
                 # MA50 toujours visible
