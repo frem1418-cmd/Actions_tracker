@@ -3394,6 +3394,22 @@ if t_list:
 
             chg_cols_present = [c for c in ['Chg 1J', 'Chg 1M', 'Chg YTD', 'Chg YTD (div. incl.)'] if c in selection_finale]
 
+            # Streamlit aligne à droite par défaut les colonnes de type numérique, même si le
+            # formatter du Styler affiche du texte. On force ces colonnes en TextColumn pour
+            # obtenir un véritable alignement à gauche.
+            config_colonnes_affichage = {
+                "Date Détachement": st.column_config.DateColumn("Date Détachement", format="DD/MM/YYYY"),
+                "Date Versement Dividende": st.column_config.DateColumn("Date Versement Dividende", format="DD/MM/YYYY"),
+                "Prochains Résultats": st.column_config.DateColumn("Prochains Résultats", format="DD/MM/YYYY"),
+            }
+            for col in chg_cols_present:
+                config_colonnes_affichage[col] = st.column_config.NumberColumn(
+                    col, alignment="left", pinned=(col in selection_figee)
+                )
+            for col in selection_figee:
+                if col not in config_colonnes_affichage:
+                    config_colonnes_affichage[col] = st.column_config.Column(pinned=True)
+
             sel = st.dataframe(
                 df[selection_finale].style.apply(style_df, axis=None).format(
                     formatter=lambda x: clean_num(x) if isinstance(x, (int, float)) else x
@@ -3405,12 +3421,7 @@ if t_list:
                 width="stretch",
                 hide_index=True,
                 height=min(hauteur_dynamique, 850),
-                column_config={
-                    "Date Détachement": st.column_config.DateColumn("Date Détachement", format="DD/MM/YYYY"),
-                    "Date Versement Dividende": st.column_config.DateColumn("Date Versement Dividende", format="DD/MM/YYYY"),
-                    "Prochains Résultats": st.column_config.DateColumn("Prochains Résultats", format="DD/MM/YYYY"),
-                    **{col: st.column_config.Column(pinned=True) for col in selection_figee}
-                },
+                column_config=config_colonnes_affichage,
             )
 
             # =======================================================================
