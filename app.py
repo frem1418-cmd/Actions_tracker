@@ -194,7 +194,7 @@ def news_dashboard_module(liste_tickers):
 
 @st.fragment(run_every="5m")
 def actualite_module(liste_tickers):
-    col_search, col_sent, col_trad, col_ref = st.columns([0.4, 0.2, 0.2, 0.2])
+    col_search, col_sent, col_trad, col_ref, col_force = st.columns([0.4, 0.2, 0.15, 0.1, 0.15])
     with col_search:
         query = st.text_input(
             "🔍 Rechercher...",
@@ -208,9 +208,14 @@ def actualite_module(liste_tickers):
                                    key="mode_fr")
 
     with col_ref:
-        if st.button("🔄", help="Actualiser le flux", key="refresh_news_btn"):
+        if st.button("🔄", help="Actualiser le flux d'actualités", key="refresh_news_btn"):
             get_quick_news.clear()
             st.rerun(scope="fragment")
+
+    with col_force:
+        if st.button("🔁 Tout actualiser", help="Forcer l'actualisation complète des données", key="refresh_force_btn"):
+            st.cache_data.clear()
+            st.rerun()
 
     if 'nb_news_display' not in st.session_state:
         st.session_state.nb_news_display = 40
@@ -2949,29 +2954,53 @@ if page_actuelle == "🌍 Indices":
 # PAGE : PORTEFEUILLE (comportement existant)
 # =======================================================================
 with st.sidebar:
-    if st.button("🔄 Forcer l'actualisation", width="stretch"):
-        st.cache_data.clear()
-        st.rerun()
+    st.markdown("""
+        <style>
+        .sb-mini-header {
+            font-size: 0.92em; font-weight: 700; color: #1f3a5f;
+            margin: 2px 0 6px 0; display:flex; align-items:center; gap:6px;
+        }
+        .sb-thin-divider { border: none; border-top: 1px solid #e2e8f0; margin: 10px 0; }
+        .ticker-card {
+            display:flex; justify-content:space-between; align-items:center;
+            padding:8px 12px; margin-bottom:6px; border-radius:9px;
+            background-color:#f5f7fa; border:1px solid #e5e9f0;
+            border-left: 3px solid #1f3a5f;
+        }
+        .ticker-card .nom { font-weight:700; color:#1f3a5f; font-size:0.95em; }
+        .ticker-card .tk {
+            font-size:0.75em; color:#64748b; background:white; padding:2px 7px;
+            border-radius:5px; border:1px solid #e2e8f0; white-space:nowrap; margin-left:8px;
+        }
+        </style>
+    """, unsafe_allow_html=True)
 
-    st.divider()
-    st.header("🔍 Recherche d'Action")
-    sq = st.text_input("Nom de la société (ex: LVMH)")
-    if sq:
-        sug = search_ticker(sq)
-        if sug:
-            opt     = [x['label'] for x in sug]
-            sel_opt = st.selectbox("Résultats :", opt)
-            tk_add  = sug[opt.index(sel_opt)]['symbol']
-            if st.button(f"➕ Ajouter {tk_add}"):
-                cur_tk          = load_watchlist_gsheets(st.session_state.get('sel_list', 'Portefeuille Principal'))
-                new_tickers_list = cur_tk + f", {tk_add}"
-                save_watchlist_gsheets(st.session_state.get('sel_list', 'Portefeuille Principal'), new_tickers_list)
-                st.session_state["ticker_editor"] = new_tickers_list
-                st.cache_data.clear()
-                st.rerun()
+    # Correspondance affichage : renomme certains profils sans toucher au Google Sheet source
+    LABELS_PROFILS = {"Dividendes": "Div. et Résultats"}
 
-    st.divider()
-    st.header("📂 Portefeuilles")
+    try:
+        df_conf      = get_column_config()
+        liste_profils = sorted(df_conf['Profil'].unique().tolist())
+    except Exception:
+        df_conf = None
+        liste_profils = []
+
+    if show_news_portfolio:
+        profil_choisi = liste_profils[0] if liste_profils else None
+    else:
+        st.markdown('<div class="sb-mini-header">📋 Vue</div>', unsafe_allow_html=True)
+        if liste_profils:
+            liste_profils_affiche = [LABELS_PROFILS.get(p, p) for p in liste_profils]
+            map_affiche_to_reel  = {LABELS_PROFILS.get(p, p): p for p in liste_profils}
+            profil_affiche = st.selectbox(
+                "Vue :", options=liste_profils_affiche, label_visibility="collapsed", key="profil_vue_choisi"
+            )
+            profil_choisi = map_affiche_to_reel.get(profil_affiche, profil_affiche)
+        else:
+            profil_choisi = None
+        st.markdown('<hr class="sb-thin-divider">', unsafe_allow_html=True)
+
+    st.markdown('<div class="sb-mini-header">📂 Portefeuilles</div>', unsafe_allow_html=True)
     lists    = get_all_watchlists()
     sel_list = st.selectbox("Liste active :", options=list(lists.keys()), key='sel_list', on_change=on_list_change)
 
@@ -3013,7 +3042,7 @@ with st.sidebar:
             else:
                 st.error("🚫 Impossible de supprimer la dernière liste !")
 
-    st.divider()
+    st.markdown('<hr class="sb-thin-divider">', unsafe_allow_html=True)
 
     current_content = load_watchlist_gsheets(sel_list)
     if "ticker_editor" not in st.session_state:
@@ -3022,36 +3051,84 @@ with st.sidebar:
     show_edit_tickers = st.toggle("✏️ Modifier", key="show_edit_tickers",
                                    help="Afficher l'éditeur pour modifier les tickers de ce portefeuille")
 
+    tickers_actuels = [t.strip().upper() for t in current_content.replace('\r', '').replace('\n', ',').split(',') if t.strip()]
+
+    if tickers_actuels:
+        with ThreadPoolExecutor(max_workers=min(20, len(tickers_actuels))) as executor:
+            noms_tickers = dict(zip(tickers_actuels, executor.map(get_action_name, tickers_actuels)))
+    else:
+        noms_tickers = {}
+
     if show_edit_tickers:
-        tickers_input = st.text_area(
-            "Éditer les tickers :",
-            value=current_content,
-            height=100,
-            key="ticker_editor",
-            on_change=update_tickers_callback
-        ).upper()
+        st.caption(f"✏️ Édition de « {sel_list} » — {len(tickers_actuels)} valeur(s)")
+
+        if tickers_actuels:
+            for tk in tickers_actuels:
+                c1, c2 = st.columns([0.82, 0.18])
+                with c1:
+                    st.markdown(
+                        f"<div class='ticker-card' style='margin-bottom:4px;'>"
+                        f"<span class='nom'>{noms_tickers.get(tk, tk)}</span>"
+                        f"<span class='tk'>{tk}</span></div>",
+                        unsafe_allow_html=True
+                    )
+                with c2:
+                    if st.button("✕", key=f"del_tk_{tk}", help=f"Retirer {tk} du portefeuille"):
+                        nouvelle_liste = [x for x in tickers_actuels if x != tk]
+                        nouveau_contenu = ", ".join(nouvelle_liste)
+                        save_watchlist_gsheets(sel_list, nouveau_contenu)
+                        st.session_state["ticker_editor"] = nouveau_contenu
+                        st.cache_data.clear()
+                        st.rerun()
+        else:
+            st.info("Aucun ticker dans cette liste pour l'instant.")
+
+        st.markdown("**➕ Ajouter une valeur**")
+        aq = st.text_input("Nom ou ticker", key="edit_add_search", label_visibility="collapsed",
+                            placeholder="Ex: LVMH, AAPL...")
+        if aq:
+            asug = search_ticker(aq)
+            if asug:
+                aopt  = [x['label'] for x in asug]
+                asel  = st.selectbox("Résultats :", aopt, key="edit_add_select", label_visibility="collapsed")
+                a_tk  = asug[aopt.index(asel)]['symbol']
+                if st.button(f"➕ Ajouter {a_tk}", key="edit_add_btn", width="stretch"):
+                    if a_tk not in tickers_actuels:
+                        nouvelle_liste = tickers_actuels + [a_tk]
+                        nouveau_contenu = ", ".join(nouvelle_liste)
+                        save_watchlist_gsheets(sel_list, nouveau_contenu)
+                        st.session_state["ticker_editor"] = nouveau_contenu
+                        st.cache_data.clear()
+                        st.rerun()
+                    else:
+                        st.warning(f"{a_tk} est déjà dans la liste.")
+            else:
+                st.caption("Aucun résultat pour cette recherche.")
+
+        with st.expander("⚙️ Édition avancée (texte brut)"):
+            tickers_input = st.text_area(
+                "Éditer les tickers :",
+                value=current_content,
+                height=100,
+                key="ticker_editor",
+                on_change=update_tickers_callback
+            ).upper()
     else:
         tickers_input = st.session_state.get("ticker_editor", current_content)
-        tickers_apercu = [t.strip().upper() for t in tickers_input.replace('\r', '').replace('\n', ',').split(',') if t.strip()]
-        if tickers_apercu:
-            st.caption(f"{len(tickers_apercu)} valeur(s) dans « {sel_list} »")
-            with ThreadPoolExecutor(max_workers=min(20, len(tickers_apercu))) as executor:
-                noms_apercu = dict(zip(tickers_apercu, executor.map(get_action_name, tickers_apercu)))
-            for tk in tickers_apercu:
-                nom = noms_apercu.get(tk, tk)
+        if tickers_actuels:
+            st.caption(f"{len(tickers_actuels)} valeur(s) dans « {sel_list} »")
+            for tk in tickers_actuels:
                 st.markdown(
-                    f"<div style='display:flex; justify-content:space-between; align-items:center; "
-                    f"padding:6px 10px; margin-bottom:4px; border-radius:8px; background-color:#f5f7fa; "
-                    f"border:1px solid #e5e9f0;'>"
-                    f"<span style='font-weight:600; color:#1f3a5f; font-size:0.88em;'>{nom}</span>"
-                    f"<span style='font-size:0.75em; color:#64748b; background:white; padding:1px 6px; "
-                    f"border-radius:5px; border:1px solid #e2e8f0;'>{tk}</span>"
-                    f"</div>",
+                    f"<div class='ticker-card'>"
+                    f"<span class='nom'>{noms_tickers.get(tk, tk)}</span>"
+                    f"<span class='tk'>{tk}</span></div>",
                     unsafe_allow_html=True
                 )
         else:
             st.info("Aucun ticker dans cette liste. Cliquez sur « Modifier » pour en ajouter.")
-    st.divider()
+
+    st.markdown('<hr class="sb-thin-divider">', unsafe_allow_html=True)
+
 
     # Colonnes disponibles (sans les colonnes internes)
     cols_all = [
@@ -3076,7 +3153,16 @@ if st.session_state.get("vue_indice"):
     st.stop()
 
 # --- TITRE ---
-st.title(f"📁 Portefeuille : {sel_list}")
+col_titre, col_refresh_titre = st.columns([0.92, 0.08])
+with col_titre:
+    st.title(f"📁 Portefeuille : {sel_list}")
+with col_refresh_titre:
+    if not show_news_portfolio:
+        st.write("")
+        st.write("")
+        if st.button("🔄", help="Forcer l'actualisation des données", key="btn_force_refresh_titre"):
+            st.cache_data.clear()
+            st.rerun()
 t_list = [t.strip().upper() for t in tickers_input.replace('\r', '').replace('\n', ',').split(',') if t.strip()]
 
 
@@ -3116,15 +3202,13 @@ if t_list:
         COLS_INTERNES = {'p_details', 'full_data'}
 
         try:
-            df_conf      = get_column_config()
-            liste_profils = sorted(df_conf['Profil'].unique().tolist())
-            if show_news_portfolio:
-                profil_choisi = liste_profils[0] if liste_profils else None
-            else:
-                profil_choisi = st.sidebar.selectbox("📋 Vue de tableau", options=liste_profils)
             config_active = df_conf[df_conf['Profil'] == profil_choisi]
             cols_base         = config_active[config_active['Afficher'] == True]['Nom_Colonne'].tolist()
             cols_figees_base  = config_active[config_active['Figer'] == True]['Nom_Colonne'].tolist()
+            # Vue "Div. et Résultats" (ex-"Dividendes") : on force l'ajout de la colonne
+            # "Prochains Résultats" même si elle n'est pas cochée dans le Google Sheet source.
+            if profil_choisi == "Dividendes" and "Prochains Résultats" not in cols_base:
+                cols_base.append("Prochains Résultats")
         except Exception as e:
             st.error(f"Erreur configuration colonnes : {e}")
             cols_base, cols_figees_base = ["Ticker", "Nom"], ["Ticker"]
@@ -3256,11 +3340,21 @@ if t_list:
 
             for col in ['Chg 1J', 'Chg 1M', 'Chg YTD', 'Chg YTD (div. incl.)']:
                 if col in df.columns:
+                    styles[col] = 'text-align: left;'
                     col_num = pd.to_numeric(df[col], errors='coerce')
                     mask_plus  = col_num > 0
                     mask_moins = col_num < 0
-                    styles.loc[mask_plus,  col] += 'color: #28a745; font-weight: bold;'
-                    styles.loc[mask_moins, col] += 'color: #dc3545; font-weight: bold;'
+                    styles.loc[mask_plus,  col] += ' color: #28a745; font-weight: bold;'
+                    styles.loc[mask_moins, col] += ' color: #dc3545; font-weight: bold;'
+
+            # Dividende / résultats imminents (< 1 semaine) : mise en avant rose foncé
+            aujourd_hui = pd.Timestamp.now().normalize()
+            for col_date in ['Date Versement Dividende', 'Prochains Résultats']:
+                if col_date in df.columns:
+                    dates_col   = pd.to_datetime(df[col_date], errors='coerce')
+                    delta_jours = (dates_col - aujourd_hui).dt.days
+                    mask_imminent = delta_jours.notna() & (delta_jours >= 0) & (delta_jours <= 7)
+                    styles.loc[mask_imminent, col_date] += 'background-color: #fce4ec; color: #ad1457; font-weight: bold;'
 
             return styles
 
