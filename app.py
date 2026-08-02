@@ -2262,13 +2262,15 @@ def tdm_get_advanced_market_data(tickers, compute_entry_price=False):
     df['IntradayContribution'] = (df['Weight'] * df['IntradayReturn']) / 100
     df['YTDContribution'] = (df['Weight'] * df['YTDReturn']) / 100
 
-    df['Volume'] = df['Volume_Raw'].apply(_tdm_format_thousands_int)
-    df['VolumeMoyen'] = df['Volume_Moyen_Raw'].apply(_tdm_format_thousands_int)
-    df['Amount'] = df['Amount_Raw'].apply(_tdm_format_millions_int)
-    df['AmountMoyen'] = df['Amount_Moyen_Raw'].apply(_tdm_format_millions_int)
+    # Valeurs numériques brutes conservées (formatage K/M/B à l'affichage uniquement, cf. Styler.format)
+    # pour permettre un tri numérique correct dans st.dataframe au lieu d'un tri alphabétique sur du texte.
+    df['Volume'] = df['Volume_Raw']
+    df['VolumeMoyen'] = df['Volume_Moyen_Raw']
+    df['Amount'] = df['Amount_Raw']
+    df['AmountMoyen'] = df['Amount_Moyen_Raw']
 
-    df['MarketCap'] = df['MarketCap_Raw'].apply(_tdm_format_billions)
-    df['SharesOutstanding'] = df['SharesOutstanding_Raw'].apply(_tdm_format_smart_large_numbers)
+    df['MarketCap'] = df['MarketCap_Raw']
+    df['SharesOutstanding'] = df['SharesOutstanding_Raw']
     df['EntreeConseillee'] = df['EntreeConseillee_Raw']
     df['EntreeBNA'] = df['EntreeBNA_Raw']
 
@@ -2573,7 +2575,13 @@ def afficher_tableau_de_bord_marche():
                 'PER': '{:.2f}',
                 'P/B': '{:.2f}',
                 'Rend. Dividende': '{:.2f}%',
-                'Dividende': '{:.2f}'
+                'Dividende': '{:.2f}',
+                'Capitalisation': lambda v: f"{v / 1e9:.2f}B" if pd.notna(v) else "N/A",
+                'Volume': lambda v: f"{int(round(v / 1e3))}K" if pd.notna(v) else "N/A",
+                'Volume Moyen': lambda v: f"{int(round(v / 1e3))}K" if pd.notna(v) else "N/A",
+                'Montant': lambda v: f"{int(round(v / 1e6))}M" if pd.notna(v) else "N/A",
+                'Montant Moyen': lambda v: f"{int(round(v / 1e6))}M" if pd.notna(v) else "N/A",
+                'Actions en Circ.': lambda v: _tdm_format_smart_large_numbers(v) if pd.notna(v) else "N/A"
             }, na_rep="N/A")
 
         cols_to_display = [
