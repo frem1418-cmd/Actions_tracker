@@ -1618,7 +1618,7 @@ def afficher_menu_indices():
                 st.session_state["vue_indice"] = nom_idx
                 st.rerun()
     if st.session_state.get("vue_indice"):
-        if st.sidebar.button("↩️ Retour au portefeuille", width="stretch"):
+        if st.sidebar.button("↩️ Retour", width="stretch"):
             st.session_state["vue_indice"] = None
             st.rerun()
 
@@ -2905,6 +2905,14 @@ show_news_portfolio = (page_actuelle == "📰 Actualités")
 # PAGE : RECHERCHE UNITAIRE D'UNE ACTION
 # =======================================================================
 if page_actuelle == "🔎 Recherche":
+    afficher_menu_indices()
+
+    if st.session_state.get("vue_indice"):
+        st.divider()
+        afficher_dashboard_indice(st.session_state["vue_indice"])
+        st.stop()
+
+    st.divider()
     st.header("🔎 Recherche unitaire d'une action")
     st.caption("Recherchez une valeur pour retrouver sa fiche détaillée (diagnostic santé financière, "
                "performance & volumes, entrée conseillée, actualités) sans avoir à l'ajouter à un portefeuille.")
@@ -3006,21 +3014,43 @@ with st.sidebar:
                 st.error("🚫 Impossible de supprimer la dernière liste !")
 
     st.divider()
-    afficher_menu_indices()
-
-    st.divider()
 
     current_content = load_watchlist_gsheets(sel_list)
     if "ticker_editor" not in st.session_state:
         st.session_state["ticker_editor"] = current_content
 
-    tickers_input = st.text_area(
-        "Éditer les tickers :",
-        value=current_content,
-        height=100,
-        key="ticker_editor",
-        on_change=update_tickers_callback
-    ).upper()
+    show_edit_tickers = st.toggle("✏️ Modifier", key="show_edit_tickers",
+                                   help="Afficher l'éditeur pour modifier les tickers de ce portefeuille")
+
+    if show_edit_tickers:
+        tickers_input = st.text_area(
+            "Éditer les tickers :",
+            value=current_content,
+            height=100,
+            key="ticker_editor",
+            on_change=update_tickers_callback
+        ).upper()
+    else:
+        tickers_input = st.session_state.get("ticker_editor", current_content)
+        tickers_apercu = [t.strip().upper() for t in tickers_input.replace('\r', '').replace('\n', ',').split(',') if t.strip()]
+        if tickers_apercu:
+            st.caption(f"{len(tickers_apercu)} valeur(s) dans « {sel_list} »")
+            with ThreadPoolExecutor(max_workers=min(20, len(tickers_apercu))) as executor:
+                noms_apercu = dict(zip(tickers_apercu, executor.map(get_action_name, tickers_apercu)))
+            for tk in tickers_apercu:
+                nom = noms_apercu.get(tk, tk)
+                st.markdown(
+                    f"<div style='display:flex; justify-content:space-between; align-items:center; "
+                    f"padding:6px 10px; margin-bottom:4px; border-radius:8px; background-color:#f5f7fa; "
+                    f"border:1px solid #e5e9f0;'>"
+                    f"<span style='font-weight:600; color:#1f3a5f; font-size:0.88em;'>{nom}</span>"
+                    f"<span style='font-size:0.75em; color:#64748b; background:white; padding:1px 6px; "
+                    f"border-radius:5px; border:1px solid #e2e8f0;'>{tk}</span>"
+                    f"</div>",
+                    unsafe_allow_html=True
+                )
+        else:
+            st.info("Aucun ticker dans cette liste. Cliquez sur « Modifier » pour en ajouter.")
     st.divider()
 
     # Colonnes disponibles (sans les colonnes internes)
@@ -3046,7 +3076,7 @@ if st.session_state.get("vue_indice"):
     st.stop()
 
 # --- TITRE ---
-st.title(f"📈 {sel_list}")
+st.title(f"📁 Portefeuille : {sel_list}")
 t_list = [t.strip().upper() for t in tickers_input.replace('\r', '').replace('\n', ',').split(',') if t.strip()]
 
 
@@ -3088,7 +3118,10 @@ if t_list:
         try:
             df_conf      = get_column_config()
             liste_profils = sorted(df_conf['Profil'].unique().tolist())
-            profil_choisi = st.sidebar.selectbox("📋 Vue de tableau", options=liste_profils)
+            if show_news_portfolio:
+                profil_choisi = liste_profils[0] if liste_profils else None
+            else:
+                profil_choisi = st.sidebar.selectbox("📋 Vue de tableau", options=liste_profils)
             config_active = df_conf[df_conf['Profil'] == profil_choisi]
             cols_base         = config_active[config_active['Afficher'] == True]['Nom_Colonne'].tolist()
             cols_figees_base  = config_active[config_active['Figer'] == True]['Nom_Colonne'].tolist()
