@@ -3,6 +3,7 @@ import yfinance as yf
 import pandas as pd
 import numpy as np
 import requests
+import re
 import io
 import feedparser
 from datetime import datetime, timedelta
@@ -1445,6 +1446,86 @@ def get_index_constituents(nom_indice):
     return []
 
 
+ISIN_RE = re.compile(r"^[A-Z]{2}[A-Z0-9]{9}[0-9]$")
+
+
+@st.cache_data(ttl=86400)
+def resolve_isin_to_yahoo_ticker(isin):
+    """
+    Convertit un code ISIN en ticker Yahoo Finance via l'endpoint de recherche
+    utilisé par le site Yahoo Finance lui-même (non officiel, mais pratique car
+    de nombreux fonds/ETF européens sont plus facilement identifiables par leur
+    ISIN que par leur ticker de cotation, qui varie selon la place boursière).
+    Retourne le premier ticker trouvé, ou None si rien n'est trouvé.
+    NB : ceci ne fait que retrouver le BON ticker à interroger — si le fonds en
+    question ne publie pas sa composition sur Yahoo Finance (cas fréquent pour
+    les fonds/ETF non listés chez les grands émetteurs), get_etf_top_holdings
+    restera vide même avec le ticker correct.
+    """
+    try:
+        headers = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+        resp = requests.get(
+            "https://query2.finance.yahoo.com/v1/finance/search",
+            params={"q": isin, "quotesCount": 5, "newsCount": 0},
+            headers=headers, timeout=10
+        )
+        resp.raise_for_status()
+        quotes = resp.json().get("quotes", [])
+        if quotes:
+            return quotes[0].get("symbol")
+    except Exception:
+        pass
+    return None
+
+
+@st.cache_data(ttl=86400)
+def get_etf_top_holdings(etf_ticker):
+    """
+    Récupère les principales lignes (généralement 10 à 25 selon l'émetteur) qui
+    composent un ETF, via l'attribut `funds_data` de yfinance (nécessite
+    yfinance >= 0.2.38).
+    Retourne un tuple (composants, poids) où :
+      - composants est une liste de tuples (ticker_yf, nom), au même format que
+        get_index_constituents, réutilisable directement avec get_index_market_data.
+      - poids est un dict {ticker_yf: poids_en_pourcentage}.
+    NB : c'est une composition PARTIELLE (top holdings), pas la composition
+    complète de l'ETF — Yahoo ne fournit pas toujours cette donnée, en
+    particulier pour les ETF UCITS domiciliés en Europe (couverture inégale
+    selon l'émetteur). Si `top_holdings` est vide, il faut passer par le
+    fichier de composition officiel de l'émetteur (iShares/Amundi/Vanguard...).
+    """
+    try:
+        etf = yf.Ticker(etf_ticker)
+        holdings_df = etf.funds_data.top_holdings
+    except Exception as e:
+        st.error(f"Impossible de récupérer la composition de {etf_ticker} : {e}")
+        return [], {}
+
+    if holdings_df is None or holdings_df.empty:
+        st.warning(
+            f"Aucune composition disponible pour {etf_ticker} via Yahoo Finance "
+            f"(fréquent sur les ETF UCITS européens). Une intégration du fichier "
+            f"de composition officiel de l'émetteur serait nécessaire."
+        )
+        return [], {}
+
+    composants = []
+    poids = {}
+    for tk_brut, row in holdings_df.iterrows():
+        # Contrairement aux indices scrapés sur Wikipedia, les tickers renvoyés ici par
+        # yfinance sont déjà au format Yahoo complet, suffixe de place boursière inclus
+        # (ex: "ASML.AS", "HSBA.L", "SIE.DE") — on ne touche pas aux points.
+        tk = str(tk_brut).strip().upper()
+        nom = row.get("Name", tk)
+        pct = row.get("Holding Percent", None)
+        composants.append((tk, nom))
+        if pct is not None and not pd.isna(pct):
+            # yfinance renvoie une fraction (0.072) plutôt qu'un pourcentage (7.2)
+            poids[tk] = pct * 100 if pct <= 1 else pct
+
+    return composants, poids
+
+
 @st.cache_data(ttl=300)
 def get_index_market_data(tickers_noms, max_workers=8, _nonce=0):
     """
@@ -1464,11 +1545,27 @@ def get_index_market_data(tickers_noms, max_workers=8, _nonce=0):
         derniere_erreur = "historique insuffisant"
         for tentative in range(2):
             try:
-                hist = yf.Ticker(tk).history(period="ytd", interval="1d", auto_adjust=False)
+                t = yf.Ticker(tk)
+                hist = t.history(period="ytd", interval="1d", auto_adjust=False)
+
+                # Le Close du dernier jour peut être NaN chez Yahoo alors que le Volume
+                # est déjà présent (constaté sur ASML.AS) : on le complète avec le prix
+                # "live" de fast_info (accès par attribut — fast_info.get() ne renvoie
+                # rien de fiable sur cet objet) plutôt que de supprimer toute la ligne,
+                # ce qui ferait retomber Prix/Var Jour sur l'avant-veille.
+                if not hist.empty and pd.isna(hist["Close"].iloc[-1]):
+                    try:
+                        prix_live = getattr(t.fast_info, "last_price", None)
+                        if prix_live:
+                            hist.loc[hist.index[-1], "Close"] = float(prix_live)
+                    except Exception:
+                        pass
+
                 hist = hist.dropna(subset=["Close"])
                 if len(hist) < 2:
                     time.sleep(0.3 * (tentative + 1))
                     continue
+
                 prix             = float(hist["Close"].iloc[-1])
                 prix_veille      = float(hist["Close"].iloc[-2])
                 prix_debut_annee = float(hist["Close"].iloc[0])
@@ -1548,7 +1645,7 @@ def afficher_graphique_indice(symbole_yf, nom_indice):
             return
 
         try:
-            prev_close = idx.fast_info.get("previous_close")
+            prev_close = getattr(idx.fast_info, "previous_close", None)
         except Exception:
             prev_close = None
         if not prev_close:
@@ -1631,10 +1728,44 @@ def afficher_menu_indices():
         with cols[i % 2]:
             if st.button(nom_idx, key=f"idx_btn_{nom_idx}", width="stretch"):
                 st.session_state["vue_indice"] = nom_idx
+                st.session_state["vue_etf"] = None
                 st.rerun()
     if st.session_state.get("vue_indice"):
-        if st.sidebar.button("↩️ Retour", width="stretch"):
+        if st.sidebar.button("↩️ Retour", width="stretch", key="retour_indice"):
             st.session_state["vue_indice"] = None
+            st.rerun()
+
+    st.sidebar.divider()
+    st.sidebar.header("🧺 ETF")
+    etf_saisi = st.sidebar.text_input(
+        "Ticker Yahoo Finance ou ISIN de l'ETF",
+        placeholder="ex : EQQQ.PA, IWDA.AS, CSPX.L ou LU1681043599",
+        key="etf_ticker_input",
+        help="Ticker tel qu'utilisé par Yahoo Finance, ou code ISIN (converti "
+             "automatiquement en ticker Yahoo). La composition renvoyée (top "
+             "holdings) dépend de ce que Yahoo publie pour ce fonds — certains "
+             "fonds/ETF ne publient aucune composition sur Yahoo, quel que soit "
+             "le mode de recherche."
+    )
+    if st.sidebar.button("Analyser l'ETF", width="stretch", key="etf_btn_analyser") and etf_saisi.strip():
+        saisie = etf_saisi.strip().upper()
+        if ISIN_RE.match(saisie):
+            with st.spinner(f"Résolution de l'ISIN {saisie}..."):
+                ticker_resolu = resolve_isin_to_yahoo_ticker(saisie)
+            if not ticker_resolu:
+                st.sidebar.error(f"Aucun ticker Yahoo Finance trouvé pour l'ISIN {saisie}.")
+            else:
+                st.sidebar.success(f"ISIN {saisie} → ticker {ticker_resolu}")
+                st.session_state["vue_etf"] = ticker_resolu
+                st.session_state["vue_indice"] = None
+                st.rerun()
+        else:
+            st.session_state["vue_etf"] = saisie
+            st.session_state["vue_indice"] = None
+            st.rerun()
+    if st.session_state.get("vue_etf"):
+        if st.sidebar.button("↩️ Retour", width="stretch", key="retour_etf"):
+            st.session_state["vue_etf"] = None
             st.rerun()
 
 
@@ -1742,6 +1873,94 @@ def afficher_dashboard_indice(nom_indice):
     )
 
     # --- Détail fondamental au clic (réutilise fetch_stock_data + la fiche complète) ---
+    if sel.selection and sel.selection.rows:
+        ticker_choisi = df.iloc[sel.selection.rows[0]]["Ticker"]
+        st.divider()
+        with st.spinner(f"Analyse détaillée de {ticker_choisi}..."):
+            detail = fetch_stock_data(ticker_choisi)
+        if detail:
+            afficher_detail_action(detail)
+        else:
+            st.info("Données fondamentales indisponibles pour cette valeur.")
+
+
+def afficher_dashboard_etf(etf_ticker):
+    """Vue principale quand un ETF est saisi : composition (top holdings) + métriques marché."""
+    st.subheader(f"🧺 Composition de {etf_ticker}")
+
+    with st.spinner(f"Récupération de la composition de {etf_ticker}..."):
+        composants, poids = get_etf_top_holdings(etf_ticker)
+    if not composants:
+        return
+
+    nb_composants = len(composants)
+    st.caption(f"{nb_composants} lignes (top holdings communiqués par Yahoo Finance — "
+               f"pas nécessairement la composition intégrale de l'ETF)")
+
+    retry_key = f"retry_nonce_etf_{etf_ticker}"
+    st.session_state.setdefault(retry_key, 0)
+
+    with st.spinner("Récupération des cours..."):
+        df, erreurs_marche = get_index_market_data(tuple(composants), _nonce=st.session_state[retry_key])
+    if df.empty:
+        st.warning("Données de marché indisponibles pour le moment.")
+        if erreurs_marche:
+            with st.expander("Détails techniques (aide au diagnostic)"):
+                for e in erreurs_marche:
+                    st.caption(e)
+        if st.button("🔄 Réessayer", key=f"retry_etf_{etf_ticker}"):
+            st.session_state[retry_key] += 1
+            st.rerun()
+        return
+
+    df["PoidsNum"] = df["Ticker"].map(poids)
+
+    charger_fondamentaux = st.checkbox(
+        "Charger PER / PB (plus lent)",
+        value=(nb_composants <= 50),
+        key=f"fond_etf_{etf_ticker}"
+    )
+    if charger_fondamentaux:
+        with st.spinner("Récupération des fondamentaux..."):
+            df_fond = get_index_fondamentaux(df["Ticker"].tolist())
+        df = df.merge(df_fond, on="Ticker", how="left")
+
+    # Tri par poids dans l'ETF (à défaut, par variation du jour)
+    if df["PoidsNum"].notna().any():
+        df = df.sort_values("PoidsNum", ascending=False).reset_index(drop=True)
+    else:
+        df = df.sort_values("VarJourNum", ascending=False).reset_index(drop=True)
+
+    recherche = st.text_input("🔍 Filtrer par ticker ou nom", key=f"filtre_etf_{etf_ticker}")
+    if recherche:
+        q = recherche.lower()
+        df = df[df["Ticker"].str.lower().str.contains(q) | df["Nom"].str.lower().str.contains(q)].reset_index(drop=True)
+
+    df_affiche = pd.DataFrame({
+        "Ticker": df["Ticker"],
+        "Nom": df["Nom"],
+        "Poids %": df["PoidsNum"].apply(lambda v: f"{v:.2f}%" if pd.notna(v) else "N/A"),
+        "Prix": df["Prix"],
+        "Var Jour %": df["VarJourNum"].apply(lambda v: f"{v:+.2f}%"),
+        "Volume": df["Volume"],
+        "Var YTD %": df["VarYTDNum"].apply(lambda v: f"{v:+.2f}%"),
+    })
+    if charger_fondamentaux:
+        df_affiche["MarketCap"] = df["MarketCap"]
+        df_affiche["PE"] = df["PE"]
+        df_affiche["PB"] = df["PB"]
+
+    hauteur = min((len(df_affiche) * 35) + 38, 850)
+
+    sel = st.dataframe(
+        df_affiche.style.format(formatter=lambda x: clean_num(x) if isinstance(x, (int, float)) else x),
+        on_select="rerun",
+        selection_mode="single-row",
+        width="stretch",
+        hide_index=True,
+        height=hauteur,
+    )
+
     if sel.selection and sel.selection.rows:
         ticker_choisi = df.iloc[sel.selection.rows[0]]["Ticker"]
         st.divider()
@@ -2927,6 +3146,11 @@ if page_actuelle == "🔎 Recherche":
         afficher_dashboard_indice(st.session_state["vue_indice"])
         st.stop()
 
+    if st.session_state.get("vue_etf"):
+        st.divider()
+        afficher_dashboard_etf(st.session_state["vue_etf"])
+        st.stop()
+
     st.divider()
     st.header("🔎 Recherche unitaire d'une action")
     st.caption("Recherchez une valeur pour retrouver sa fiche détaillée (diagnostic santé financière, "
@@ -3160,6 +3384,10 @@ with st.sidebar:
 # =======================================================================
 if st.session_state.get("vue_indice"):
     afficher_dashboard_indice(st.session_state["vue_indice"])
+    st.stop()
+
+if st.session_state.get("vue_etf"):
+    afficher_dashboard_etf(st.session_state["vue_etf"])
     st.stop()
 
 # --- TITRE ---
