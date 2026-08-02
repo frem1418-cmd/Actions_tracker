@@ -1871,6 +1871,14 @@ TDM_TICKERS_FTSECHINA50 = [
     "0027.HK", "1109.HK", "0016.HK", "0011.HK"
 ]
 
+TDM_TICKERS_KOSPI = [
+    "005930.KS", "000660.KS", "373220.KS", "207940.KS", "005380.KS", "000270.KS",
+    "068270.KS", "035420.KS", "005490.KS", "006400.KS", "051910.KS", "105560.KS",
+    "055550.KS", "086790.KS", "012330.KS", "096770.KS", "066570.KS", "028260.KS",
+    "017670.KS", "015760.KS", "032830.KS", "009830.KS", "010950.KS", "035720.KS",
+    "003550.KS", "329180.KS", "034020.KS", "316140.KS", "030200.KS", "090430.KS"
+]
+
 TDM_INDEX_TICKER_MAP = {
     "NASDAQ 100 Tech": TDM_TICKERS_NASDAQ,
     "CAC 40 (France)": TDM_TICKERS_CAC40,
@@ -1886,6 +1894,7 @@ TDM_INDEX_TICKER_MAP = {
     "FTSE MIB (Italie)": TDM_TICKERS_FTSEMIB,
     "NIFTY 50 (Inde)": TDM_TICKERS_NIFTY50,
     "FTSE China 50": TDM_TICKERS_FTSECHINA50,
+    "KOSPI (Corée du Sud)": TDM_TICKERS_KOSPI,
 }
 
 # Indices pour lesquels on dispose d'un scraper Wikipedia (voir INDICES_PRINCIPAUX /
@@ -1938,6 +1947,7 @@ TDM_SYMBOL_MAP = {
     "FTSE MIB (Italie)": "FTSEMIB.MI",
     "NIFTY 50 (Inde)": "^NSEI",
     "FTSE China 50": "FXI",
+    "KOSPI (Corée du Sud)": "^KS11",
 }
 
 
@@ -2088,6 +2098,35 @@ def tdm_get_previous_close(ticker_symbol, fallback):
 
 
 @st.cache_data(ttl=300)
+@st.cache_data(ttl=300)  # Rafraîchi toutes les 5 min (les taux de change bougent peu à cette échelle)
+def tdm_get_fx_rates(currencies):
+    """Retourne {code_devise: taux vers 1 EUR} pour convertir un montant dans sa devise
+    de cotation d'origine (ex. INR, JPY, USD...) vers l'euro. L'EUR vaut toujours 1.0.
+    En cas d'échec sur une devise (paire indisponible sur Yahoo Finance), on retombe
+    sur un taux de 1.0 pour cette devise plutôt que de faire planter tout le tableau."""
+    rates = {"EUR": 1.0}
+    to_fetch = sorted(c for c in set(currencies) if c and c != "EUR")
+    if not to_fetch:
+        return rates
+
+    fx_tickers = [f"{c}EUR=X" for c in to_fetch]
+    try:
+        data = yf.download(fx_tickers, period="5d", progress=False, auto_adjust=False)
+        for c, tk in zip(to_fetch, fx_tickers):
+            try:
+                if isinstance(data.columns, pd.MultiIndex):
+                    serie = data['Close', tk].dropna()
+                else:
+                    serie = data['Close'].dropna()
+                rates[c] = float(serie.iloc[-1]) if not serie.empty else 1.0
+            except Exception:
+                rates[c] = 1.0
+    except Exception:
+        for c in to_fetch:
+            rates[c] = 1.0
+    return rates
+
+
 def tdm_get_advanced_market_data(tickers, compute_entry_price=False):
     df_prices = yf.download(tickers, start="2026-01-01", progress=False, auto_adjust=False)
     if isinstance(df_prices.columns, pd.MultiIndex):
@@ -2227,6 +2266,7 @@ def tdm_get_advanced_market_data(tickers, compute_entry_price=False):
             rows.append({
                 "Ticker": t,
                 "Name": info.get('longName', t),
+                "Currency": info.get('currency') or 'USD',
                 "Price": p_prev_close,
                 "IntradayReturn": ((p_latest - p_prev_close) / p_prev_close) * 100,
                 "Price_Latest": p_latest,
@@ -2244,7 +2284,7 @@ def tdm_get_advanced_market_data(tickers, compute_entry_price=False):
                 "YTDReturnTotal": ((p_latest + dividends_ytd - p_ytd_start) / p_ytd_start) * 100,
                 "PE": info.get('trailingPE', np.nan),
                 "PB": info.get('priceToBook', np.nan),
-                "Profit_TTM": _tdm_format_billions(info.get('netIncomeToCommon', np.nan)),
+                "Profit_TTM_Raw": info.get('netIncomeToCommon', np.nan),
                 "DividendYield": dividend_yield,
                 "Dividend": div_rate if div_rate else np.nan,
                 "SharesOutstanding_Raw": info.get('sharesOutstanding', np.nan),
@@ -2257,46 +2297,70 @@ def tdm_get_advanced_market_data(tickers, compute_entry_price=False):
     df = pd.DataFrame(rows)
     if df.empty: return df
 
-    total_mcap = df['MarketCap_Raw'].sum()
-    df['Weight'] = (df['MarketCap_Raw'] / total_mcap) * 100 if total_mcap > 0 else 0
+    # Taux de change vers l'euro pour chaque devise de cotation présente dans l'indice.
+    # NB : indispensable pour que "Poids" / "Influence Intraday" / "Contrib. YTD" restent
+    # corrects sur les indices multi-devises (MSCI World, MSCI Emerging Markets...) — sommer
+    # des capitalisations en INR + JPY + USD sans conversion faussait ces calculs.
+    fx_rates = tdm_get_fx_rates(tuple(df['Currency'].fillna('USD').unique()))
+    df['FXRate'] = df['Currency'].fillna('USD').map(fx_rates).fillna(1.0)
+
+    df['MarketCap_EUR'] = df['MarketCap_Raw'] * df['FXRate']
+    total_mcap_eur = df['MarketCap_EUR'].sum()
+    df['Weight'] = (df['MarketCap_EUR'] / total_mcap_eur) * 100 if total_mcap_eur > 0 else 0
     df['IntradayContribution'] = (df['Weight'] * df['IntradayReturn']) / 100
     df['YTDContribution'] = (df['Weight'] * df['YTDReturn']) / 100
 
     # Valeurs numériques brutes conservées (formatage K/M/B à l'affichage uniquement, cf. Styler.format)
     # pour permettre un tri numérique correct dans st.dataframe au lieu d'un tri alphabétique sur du texte.
+    # Chaque montant existe en deux versions : devise locale de cotation (ex. "Capitalisation")
+    # et convertie en euros (ex. "Capitalisation_EUR"), pour basculer entre les deux à l'affichage.
     df['Volume'] = df['Volume_Raw']
     df['VolumeMoyen'] = df['Volume_Moyen_Raw']
     df['Amount'] = df['Amount_Raw']
     df['AmountMoyen'] = df['Amount_Moyen_Raw']
+    df['Amount_EUR'] = df['Amount_Raw'] * df['FXRate']
+    df['AmountMoyen_EUR'] = df['Amount_Moyen_Raw'] * df['FXRate']
 
     df['MarketCap'] = df['MarketCap_Raw']
     df['SharesOutstanding'] = df['SharesOutstanding_Raw']
     df['EntreeConseillee'] = df['EntreeConseillee_Raw']
     df['EntreeBNA'] = df['EntreeBNA_Raw']
+    df['EntreeConseillee_EUR'] = df['EntreeConseillee_Raw'] * df['FXRate']
+    df['EntreeBNA_EUR'] = df['EntreeBNA_Raw'] * df['FXRate']
+
+    df['Price_EUR'] = df['Price'] * df['FXRate']
+    df['PriceLatest_EUR'] = df['Price_Latest'] * df['FXRate']
+    df['Dividend_EUR'] = df['Dividend'] * df['FXRate']
+    df['Profit_TTM'] = df['Profit_TTM_Raw']
+    df['ProfitTTM_EUR'] = df['Profit_TTM_Raw'] * df['FXRate']
 
     ordered_cols = [
-        "Ticker", "Name", "Weight", "Price", "IntradayReturn", "Price_Latest",
-        "EntreeConseillee", "EntreeBNA", "Return_Latest", "Volume", "VolumeMoyen", "Amount", "AmountMoyen",
-        "IntradayContribution", "MarketCap", "YTDReturn", "YTDReturnTotal", "YTDContribution", "PE", "PB", "Profit_TTM",
-        "DividendYield", "Dividend", "SharesOutstanding", "Exchange", "Timestamp_Latest",
+        "Ticker", "Name", "Currency", "Weight", "Price", "Price_EUR", "IntradayReturn", "Price_Latest", "PriceLatest_EUR",
+        "EntreeConseillee", "EntreeConseillee_EUR", "EntreeBNA", "EntreeBNA_EUR", "Return_Latest",
+        "Volume", "VolumeMoyen", "Amount", "AmountMoyen", "Amount_EUR", "AmountMoyen_EUR",
+        "IntradayContribution", "MarketCap", "MarketCap_EUR", "YTDReturn", "YTDReturnTotal", "YTDContribution",
+        "PE", "PB", "Profit_TTM", "ProfitTTM_EUR",
+        "DividendYield", "Dividend", "Dividend_EUR", "SharesOutstanding", "Exchange", "Timestamp_Latest",
         "Volume_Raw", "Volume_Moyen_Raw", "Amount_Raw", "Amount_Moyen_Raw",
         "EntreeConseillee_Raw", "EntreeBNA_Raw"
     ]
     df = df[ordered_cols]
 
     fr_cols = {
-        "Ticker": "Ticker", "Name": "Nom", "Weight": "Poids", "Price": "Prix Veille",
-        "IntradayReturn": "Var. Intraday (%)", "Price_Latest": "Dernier Prix",
-        "EntreeConseillee": "Entrée Conseillée",
-        "EntreeBNA": "Entrée BNA -15%",
+        "Ticker": "Ticker", "Name": "Nom", "Currency": "Devise", "Weight": "Poids", "Price": "Prix Veille",
+        "Price_EUR": "Prix Veille (€)",
+        "IntradayReturn": "Var. Intraday (%)", "Price_Latest": "Dernier Prix", "PriceLatest_EUR": "Dernier Prix (€)",
+        "EntreeConseillee": "Entrée Conseillée", "EntreeConseillee_EUR": "Entrée Conseillée (€)",
+        "EntreeBNA": "Entrée BNA -15%", "EntreeBNA_EUR": "Entrée BNA -15% (€)",
         "Return_Latest": "Var. Session (%)",
         "Volume": "Volume", "VolumeMoyen": "Volume Moyen",
         "Amount": "Montant", "AmountMoyen": "Montant Moyen",
+        "Amount_EUR": "Montant (€)", "AmountMoyen_EUR": "Montant Moyen (€)",
         "IntradayContribution": "Influence Intraday",
-        "MarketCap": "Capitalisation",
+        "MarketCap": "Capitalisation", "MarketCap_EUR": "Capitalisation (€)",
         "YTDReturn": "Var. YTD (%)", "YTDReturnTotal": "Var. YTD Totale, div. incl. (%)", "YTDContribution": "Contrib. YTD", "PE": "PER",
-        "PB": "P/B", "Profit_TTM": "Bénéfice TTM", "DividendYield": "Rend. Dividende",
-        "Dividend": "Dividende", "SharesOutstanding": "Actions en Circ.",
+        "PB": "P/B", "Profit_TTM": "Bénéfice TTM", "ProfitTTM_EUR": "Bénéfice TTM (€)", "DividendYield": "Rend. Dividende",
+        "Dividend": "Dividende", "Dividend_EUR": "Dividende (€)", "SharesOutstanding": "Actions en Circ.",
         "Exchange": "Bourse", "Timestamp_Latest": "Dernier Horodatage",
         "EntreeConseillee_Raw": "EntreeConseillee_Raw",
         "EntreeBNA_Raw": "EntreeBNA_Raw"
@@ -2321,6 +2385,17 @@ def afficher_tableau_de_bord_marche():
         key="tdm_show_entry_price",
         help="Calcule un prix d'entrée théorique par valeur (moyenne des modèles BNA/FCF/Analystes -15%). "
              "Ralentit le chargement du tableau car cela nécessite une requête supplémentaire par action."
+    )
+    convert_eur = st.sidebar.checkbox(
+        "🔁 Convertir les montants en €",
+        value=False,
+        key="tdm_convert_eur",
+        help="Convertit Prix / Montant / Capitalisation / Dividende / Bénéfice dans la devise locale de "
+             "cotation de chaque titre (par défaut, une colonne 'Devise' l'indique) vers l'euro, au taux de "
+             "change actuel — utile pour comparer des indices cotés dans des devises différentes (ex. NIFTY 50 "
+             "en roupies, Nikkei en yens). Note : 'Poids', 'Influence Intraday' et 'Contrib. YTD' sont de toute "
+             "façon toujours calculés en euros en interne, pour rester exacts sur les indices multi-devises "
+             "(MSCI World, MSCI Emerging Markets)."
     )
 
     index_daily_changes = tdm_get_index_daily_changes()
@@ -2531,18 +2606,22 @@ def afficher_tableau_de_bord_marche():
                 if df.loc[idx, 'Volume_Raw'] > df.loc[idx, 'Volume_Moyen_Raw'] * 1.5:
                     style_df.loc[idx, 'Volume'] = 'color: #cc0000;'
                 if df.loc[idx, 'Amount_Raw'] > df.loc[idx, 'Amount_Moyen_Raw'] * 1.5:
+                    # Les deux versions (devise locale / €) existent toujours dans df_data ;
+                    # on colorie les deux, seule celle réellement affichée sera visible.
                     style_df.loc[idx, 'Montant'] = 'color: #cc0000;'
+                    style_df.loc[idx, 'Montant (€)'] = 'color: #cc0000;'
             return style_df
 
-        def style_entry_opportunity(df):
+        def style_entry_opportunity(df, price_col, conseillee_col, bna_col):
             """Style du nom de l'action selon les seuils d'entrée :
             - vert + gras si le Dernier Prix < Entrée Conseillée ;
             - en plus, fond vert clair (signal renforcé) si le Dernier Prix < Entrée Conseillée
-              ET < Entrée BNA -15% (les deux confirment)."""
+              ET < Entrée BNA -15% (les deux confirment). Comparaison faite dans la même devise
+              (locale ou € selon le mode d'affichage actif) pour rester cohérente."""
             style_df = pd.DataFrame('', index=df.index, columns=df.columns)
-            if {'EntreeConseillee_Raw', 'EntreeBNA_Raw', 'Dernier Prix'}.issubset(df.columns):
-                below_conseillee = df['EntreeConseillee_Raw'].notna() & (df['Dernier Prix'] < df['EntreeConseillee_Raw'])
-                below_bna = df['EntreeBNA_Raw'].notna() & (df['Dernier Prix'] < df['EntreeBNA_Raw'])
+            if {conseillee_col, bna_col, price_col}.issubset(df.columns):
+                below_conseillee = df[conseillee_col].notna() & (df[price_col] < df[conseillee_col])
+                below_bna = df[bna_col].notna() & (df[price_col] < df[bna_col])
 
                 mask_double = below_conseillee & below_bna
 
@@ -2558,13 +2637,22 @@ def afficher_tableau_de_bord_marche():
             .bar(subset=['Poids'], color='#4a90e2', vmin=0, vmax=float(df_data['Poids'].max()))
 
         if show_entry_price:
-            df_styled = df_styled.apply(style_entry_opportunity, axis=None)
+            price_col = "Dernier Prix (€)" if convert_eur else "Dernier Prix"
+            conseillee_col = "Entrée Conseillée (€)" if convert_eur else "Entrée Conseillée"
+            bna_col = "Entrée BNA -15% (€)" if convert_eur else "Entrée BNA -15%"
+            df_styled = df_styled.apply(
+                lambda d: style_entry_opportunity(d, price_col, conseillee_col, bna_col), axis=None
+            )
 
         df_styled = df_styled.format({
                 'Prix Veille': '{:.2f}',
                 'Dernier Prix': '{:.2f}',
                 'Entrée Conseillée': '{:.2f}',
                 'Entrée BNA -15%': '{:.2f}',
+                'Prix Veille (€)': '{:.2f} €',
+                'Dernier Prix (€)': '{:.2f} €',
+                'Entrée Conseillée (€)': '{:.2f} €',
+                'Entrée BNA -15% (€)': '{:.2f} €',
                 'Var. Intraday (%)': '{:+.2f}%',
                 'Var. Session (%)': '{:+.2f}%',
                 'Poids': '{:.2f}%',
@@ -2576,27 +2664,48 @@ def afficher_tableau_de_bord_marche():
                 'P/B': '{:.2f}',
                 'Rend. Dividende': '{:.2f}%',
                 'Dividende': '{:.2f}',
-                'Capitalisation': lambda v: f"{v / 1e9:.2f}B" if pd.notna(v) else "N/A",
+                'Dividende (€)': '{:.2f} €',
+                'Bénéfice TTM': lambda v: f"{v / 1e9:.2f} B" if pd.notna(v) else "N/A",
+                'Bénéfice TTM (€)': lambda v: f"{v / 1e9:.2f} B €" if pd.notna(v) else "N/A",
+                'Capitalisation': lambda v: f"{v / 1e9:.2f} B" if pd.notna(v) else "N/A",
+                'Capitalisation (€)': lambda v: f"{v / 1e9:.2f} B €" if pd.notna(v) else "N/A",
                 'Volume': lambda v: f"{int(round(v / 1e3))}K" if pd.notna(v) else "N/A",
                 'Volume Moyen': lambda v: f"{int(round(v / 1e3))}K" if pd.notna(v) else "N/A",
                 'Montant': lambda v: f"{int(round(v / 1e6))}M" if pd.notna(v) else "N/A",
                 'Montant Moyen': lambda v: f"{int(round(v / 1e6))}M" if pd.notna(v) else "N/A",
+                'Montant (€)': lambda v: f"{int(round(v / 1e6))}M €" if pd.notna(v) else "N/A",
+                'Montant Moyen (€)': lambda v: f"{int(round(v / 1e6))}M €" if pd.notna(v) else "N/A",
                 'Actions en Circ.': lambda v: _tdm_format_smart_large_numbers(v) if pd.notna(v) else "N/A"
             }, na_rep="N/A")
 
-        cols_to_display = [
-            "Ticker", "Nom", "Poids", "Prix Veille", "Var. Intraday (%)", "Dernier Prix",
-            "Var. Session (%)", "Volume", "Volume Moyen", "Montant", "Montant Moyen",
-            "Influence Intraday", "Capitalisation", "Var. YTD (%)", "Var. YTD Totale, div. incl. (%)", "Contrib. YTD",
-            "PER", "P/B", "Bénéfice TTM", "Rend. Dividende", "Dividende", "Actions en Circ.",
-            "Bourse", "Dernier Horodatage"
-        ]
-        if show_entry_price:
-            idx_insert = cols_to_display.index("Dernier Prix") + 1
-            cols_to_display.insert(idx_insert, "Entrée BNA -15%")
-            cols_to_display.insert(idx_insert, "Entrée Conseillée")
+        if convert_eur:
+            cols_to_display = [
+                "Ticker", "Nom", "Poids", "Prix Veille (€)", "Var. Intraday (%)", "Dernier Prix (€)",
+                "Var. Session (%)", "Volume", "Volume Moyen", "Montant (€)", "Montant Moyen (€)",
+                "Influence Intraday", "Capitalisation (€)", "Var. YTD (%)", "Var. YTD Totale, div. incl. (%)", "Contrib. YTD",
+                "PER", "P/B", "Bénéfice TTM (€)", "Rend. Dividende", "Dividende (€)", "Actions en Circ.",
+                "Bourse", "Dernier Horodatage"
+            ]
+            if show_entry_price:
+                idx_insert = cols_to_display.index("Dernier Prix (€)") + 1
+                cols_to_display.insert(idx_insert, "Entrée BNA -15% (€)")
+                cols_to_display.insert(idx_insert, "Entrée Conseillée (€)")
+        else:
+            cols_to_display = [
+                "Ticker", "Nom", "Devise", "Poids", "Prix Veille", "Var. Intraday (%)", "Dernier Prix",
+                "Var. Session (%)", "Volume", "Volume Moyen", "Montant", "Montant Moyen",
+                "Influence Intraday", "Capitalisation", "Var. YTD (%)", "Var. YTD Totale, div. incl. (%)", "Contrib. YTD",
+                "PER", "P/B", "Bénéfice TTM", "Rend. Dividende", "Dividende", "Actions en Circ.",
+                "Bourse", "Dernier Horodatage"
+            ]
+            if show_entry_price:
+                idx_insert = cols_to_display.index("Dernier Prix") + 1
+                cols_to_display.insert(idx_insert, "Entrée BNA -15%")
+                cols_to_display.insert(idx_insert, "Entrée Conseillée")
 
         caption_txt = "💡 Cliquez sur une ligne pour afficher la fiche détaillée de l'action."
+        if not convert_eur:
+            caption_txt += " 🌍 Les montants sont dans la devise locale de cotation de chaque titre (colonne 'Devise')."
         if show_entry_price:
             caption_txt += (" 🟢 Nom en vert et gras si le dernier prix est inférieur à l'Entrée Conseillée ; "
                              "en plus surligné en vert clair si l'Entrée BNA -15% le confirme également.")
