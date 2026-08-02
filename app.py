@@ -2611,11 +2611,13 @@ def afficher_tableau_de_bord_marche():
             return style_df
 
         def style_entry_opportunity(df, price_col, conseillee_col, bna_col):
-            """Style du nom de l'action selon les seuils d'entrée :
+            """Style du nom de l'action et des colonnes d'entrée selon les seuils d'entrée :
             - vert + gras si le Dernier Prix < Entrée Conseillée ;
             - en plus, fond vert clair (signal renforcé) si le Dernier Prix < Entrée Conseillée
               ET < Entrée BNA -15% (les deux confirment). Comparaison faite dans la même devise
-              (locale ou € selon le mode d'affichage actif) pour rester cohérente."""
+              (locale ou € selon le mode d'affichage actif) pour rester cohérente.
+            - la valeur de 'Entrée Conseillée' est elle-même colorée en vert si elle est
+              supérieure au Dernier Prix, idem pour 'Entrée BNA -15%'."""
             style_df = pd.DataFrame('', index=df.index, columns=df.columns)
             if {conseillee_col, bna_col, price_col}.issubset(df.columns):
                 below_conseillee = df[conseillee_col].notna() & (df[price_col] < df[conseillee_col])
@@ -2627,6 +2629,11 @@ def afficher_tableau_de_bord_marche():
                 style_df.loc[mask_double, 'Nom'] = (
                     'color: #28a745; font-weight: bold; background-color: #e6ffec;'
                 )
+
+                # Colore la valeur elle-même dans les colonnes "Entrée Conseillée" / "Entrée BNA -15%"
+                # si elle est supérieure au Dernier Prix.
+                style_df.loc[below_conseillee, conseillee_col] = 'color: #28a745; font-weight: bold;'
+                style_df.loc[below_bna, bna_col] = 'color: #28a745; font-weight: bold;'
             return style_df
 
         df_styled = df_data.style\
