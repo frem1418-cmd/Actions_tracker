@@ -2625,7 +2625,7 @@ def afficher_tableau_de_bord_marche():
 
                 mask_double = below_conseillee & below_bna
 
-                style_df.loc[below_conseillee, 'Nom'] = 'color: #28a745; font-weight: bold;'
+                style_df.loc[below_conseillee, 'Nom'] = 'color: #28a745;'
                 style_df.loc[mask_double, 'Nom'] = (
                     'color: #28a745; font-weight: bold; background-color: #e6ffec;'
                 )
