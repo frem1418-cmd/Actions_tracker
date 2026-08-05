@@ -2299,23 +2299,39 @@ def _tdm_build_comparison_chart(data_dict, chart_title, x_title):
 
 @st.cache_data(ttl=60)
 def tdm_get_index_daily_changes():
-    """Variation du jour (dernier cours vs clôture veille) pour chaque indice,
-    utilisée pour l'affichage rapide dans le menu latéral."""
+    """Variation du jour (dernier cours live vs clôture veille) pour chaque indice,
+    utilisée pour l'affichage rapide dans le menu latéral.
+
+    NOTE : on utilise ici la cotation live (fast_info), comme le fait le
+    reste du dashboard (cf. afficher_graphique_indice), et non un
+    téléchargement en masse de bougies journalières (yf.download period="5d").
+    Cette dernière approche comparait deux clôtures journalières dont la
+    bougie du jour n'est pas toujours actualisée aussi vite que la cotation
+    live, ce qui provoquait un décalage (voire un jour de retard complet)
+    entre le % affiché dans la sidebar et le % affiché en haut de page pour
+    le même indice."""
     changes = {}
     symbols = list(dict.fromkeys(TDM_SYMBOL_MAP.values()))
-    try:
-        data = yf.download(symbols, period="5d", progress=False)['Close']
-        if isinstance(data, pd.Series):
-            data = data.to_frame(name=symbols[0])
-        for name, sym in TDM_SYMBOL_MAP.items():
-            try:
-                s = data[sym].dropna()
-                if len(s) >= 2:
-                    changes[name] = ((s.iloc[-1] - s.iloc[-2]) / s.iloc[-2]) * 100
-            except Exception:
-                continue
-    except Exception:
-        pass
+
+    def _one(sym):
+        try:
+            fi = yf.Ticker(sym).fast_info
+            last = getattr(fi, "last_price", None)
+            prev = getattr(fi, "previous_close", None)
+            if last and prev:
+                return sym, ((float(last) - float(prev)) / float(prev)) * 100
+        except Exception:
+            pass
+        return sym, None
+
+    with ThreadPoolExecutor(max_workers=min(10, len(symbols) or 1)) as executor:
+        results = dict(executor.map(_one, symbols))
+
+    for name, sym in TDM_SYMBOL_MAP.items():
+        val = results.get(sym)
+        if val is not None:
+            changes[name] = val
+
     return changes
 
 
