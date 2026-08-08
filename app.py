@@ -2602,7 +2602,7 @@ def tdm_get_advanced_market_data(tickers, compute_entry_price=False):
 
     df_prices = yf.download(
         tickers, start=debut_annee, progress=False, auto_adjust=False,
-        actions=True, group_by="ticker" if len(tickers) > 1 else "column",
+        actions=True,
     )
     if isinstance(df_prices.columns, pd.MultiIndex):
         df_prices.columns = df_prices.columns.remove_unused_levels()
