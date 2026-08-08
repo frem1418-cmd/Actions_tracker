@@ -3139,6 +3139,9 @@ def afficher_tableau_de_bord_marche():
             except Exception:
                 pass
 
+        nb_lignes_marche = len(df_data)
+        st.caption(f"{nb_lignes_marche} valeur{'s' if nb_lignes_marche != 1 else ''}")
+
         sel_marche = st.dataframe(
             df_styled,
             use_container_width=True,
