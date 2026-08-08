@@ -20,6 +20,18 @@ import urllib.parse
 import logging
 logging.getLogger("streamlit").setLevel(logging.ERROR)
 
+# Session HTTP interne de yfinance : elle gère automatiquement le "crumb"/cookie
+# désormais exigé par Yahoo Finance sur ses endpoints (query1/query2). En
+# réutilisant cette session pour nos propres appels groupés à l'API "quote",
+# on évite les 401 silencieux qu'on aurait avec un simple `requests.get()`
+# "nu" — c'est ce qui, sans ça, fait retomber TOUT le lot sur le repli
+# individuel (lent) et explique un affichage qui traîne sur les gros indices.
+try:
+    from yfinance.data import YfData
+    _YF_SESSION = YfData()
+except Exception:
+    _YF_SESSION = None
+
 conn = st.connection("gsheets", type=GSheetsConnection)
 
 # =======================================================================
@@ -1544,20 +1556,33 @@ def _yahoo_quote_batch(tickers, chunk_size=150, max_workers=6):
     tickers = list(dict.fromkeys(tickers))  # dédoublonne en gardant l'ordre
     resultat = {}
 
+    url = "https://query1.finance.yahoo.com/v7/finance/quote"
+
     def _one_chunk(chunk):
+        params = {"symbols": ",".join(chunk)}
         try:
-            r = requests.get(
-                "https://query1.finance.yahoo.com/v7/finance/quote",
-                params={"symbols": ",".join(chunk)},
-                headers=_YAHOO_QUOTE_HEADERS,
-                timeout=10,
-            )
+            if _YF_SESSION is not None:
+                # Session yfinance : crumb/cookie déjà gérés, requête authentifiée.
+                r = _YF_SESSION.get(url, params=params)
+            else:
+                r = requests.get(url, params=params, headers=_YAHOO_QUOTE_HEADERS, timeout=10)
             r.raise_for_status()
             return r.json().get("quoteResponse", {}).get("result", [])
         except Exception:
             return []
 
     chunks = [tickers[i:i + chunk_size] for i in range(0, len(tickers), chunk_size)]
+
+    if _YF_SESSION is not None and chunks:
+        # Appel "à vide" (un seul symbole) hors du pool de threads : force
+        # yfinance à résoudre son crumb/cookie une bonne fois pour toutes
+        # avant que plusieurs threads ne tentent de le faire en même temps
+        # (source classique de 401 intermittents sur le tout premier lot).
+        try:
+            _YF_SESSION.get(url, params={"symbols": chunks[0][0]})
+        except Exception:
+            pass
+
     with ThreadPoolExecutor(max_workers=max_workers) as executor:
         for quotes in executor.map(_one_chunk, chunks):
             for q in quotes:
