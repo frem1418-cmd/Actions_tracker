@@ -2521,47 +2521,161 @@ def tdm_get_fx_rates(currencies):
     return rates
 
 
+def _tdm_calc_entree_conseillee(ticker_symbol, info):
+    """
+    Entrée conseillée (-15%) : moyenne des modèles BNA Forward/Actuel, FCF et
+    Cible Analystes, puis -15%. Isolée dans sa propre fonction pour pouvoir
+    être appelée en parallèle (ThreadPoolExecutor) sur tous les titres au lieu
+    d'une boucle séquentielle — c'est la seule partie de cette page qui a
+    encore besoin d'un accès individuel par titre (cash-flow non disponible
+    en appel groupé chez Yahoo).
+    """
+    try:
+        ticker_obj = yf.Ticker(ticker_symbol)
+        ef = info.get('forwardEps') or 0
+        pf = info.get('forwardPE') or 15
+        trailing_eps_row = info.get('trailingEps') or 0
+        trailing_pe_row  = info.get('trailingPE')
+
+        if trailing_pe_row and 5 <= trailing_pe_row <= 60:
+            pf_valo = trailing_pe_row
+        else:
+            per_hist_moy_row = calc_per_historique_moyen(ticker_obj, years=5)
+            if per_hist_moy_row and per_hist_moy_row > 0:
+                pf_valo = per_hist_moy_row
+            elif pf and 3 < pf <= 80:
+                pf_valo = pf
+            else:
+                pf_valo = 15
+
+        if trailing_eps_row and trailing_eps_row > 0 and ef:
+            ef_pondere = (ef * 0.30) + (trailing_eps_row * 0.70)
+        else:
+            ef_pondere = ef
+
+        ef_valo = ef_pondere
+        if trailing_eps_row and trailing_eps_row > 0 and ef_pondere and ef_pondere > trailing_eps_row * 1.5:
+            ef_valo = trailing_eps_row * 1.5
+
+        vb = ef_valo * pf_valo if ef_valo else 0
+        entree_bna = vb * 0.85 if vb > 0 else np.nan
+
+        tm = info.get('targetMeanPrice') or 0
+
+        sh_out = info.get('sharesOutstanding') or 0
+        try:
+            fcf_series = ticker_obj.cashflow.loc['Free Cash Flow'].dropna().head(3) \
+                if 'Free Cash Flow' in ticker_obj.cashflow.index else pd.Series(dtype=float)
+            fcf_raw = fcf_series.mean() if not fcf_series.empty else 0
+        except Exception:
+            fcf_raw = 0
+        vf = (fcf_raw / sh_out * 1.05) * pf if sh_out and fcf_raw else 0
+
+        mods = [v for v in [vb, vf, tm] if v and v > 0]
+        fair_avg = sum(mods) / len(mods) if mods else np.nan
+        entree_conseillee = fair_avg * 0.85 if not pd.isna(fair_avg) else np.nan
+        return entree_conseillee, entree_bna
+    except Exception:
+        return np.nan, np.nan
+
+
 def tdm_get_advanced_market_data(tickers, compute_entry_price=False):
-    df_prices = yf.download(tickers, start="2026-01-01", progress=False, auto_adjust=False)
+    """
+    Version optimisée : les champs principaux (prix, variation, capitalisation,
+    PER, P/B, dividende, actions en circulation, bourse...) viennent d'appels
+    groupés à l'API "quote" de Yahoo (`_yahoo_quote_batch`) au lieu d'un
+    `yf.Ticker(t).info` par titre — c'était le vrai goulot d'étranglement de
+    cette page (boucle séquentielle, un appel réseau lent par titre, sans
+    parallélisation). L'historique de prix ET les dividendes YTD sont
+    téléchargés en un seul appel groupé (`yf.download(..., actions=True)`),
+    ce qui évite un appel `.dividends` individuel par titre.
+    Seul le calcul optionnel "Entrée Conseillée" (compute_entry_price=True)
+    nécessite encore un accès par titre (cash-flow indisponible en lot chez
+    Yahoo) ; il est désormais parallélisé au lieu d'être séquentiel.
+    Repli individuel (`.info`) uniquement pour les titres absents du lot Yahoo.
+    """
+    tickers = list(tickers)
+    if not tickers:
+        return pd.DataFrame()
+
+    debut_annee = f"{datetime.now().year}-01-01"
+
+    df_prices = yf.download(
+        tickers, start=debut_annee, progress=False, auto_adjust=False,
+        actions=True, group_by="ticker" if len(tickers) > 1 else "column",
+    )
     if isinstance(df_prices.columns, pd.MultiIndex):
         df_prices.columns = df_prices.columns.remove_unused_levels()
+
+    def _hist_serie(t, champ):
+        try:
+            if isinstance(df_prices.columns, pd.MultiIndex):
+                return df_prices[champ, t].dropna() if (champ, t) in df_prices.columns else pd.Series(dtype=float)
+            return df_prices[champ].dropna() if champ in df_prices.columns else pd.Series(dtype=float)
+        except Exception:
+            return pd.Series(dtype=float)
+
+    # --- Un seul appel groupé (par lots) pour l'essentiel des champs fondamentaux ---
+    quotes = _yahoo_quote_batch(tickers)
+
+    # Repli individuel — en parallèle — uniquement pour les titres absents du lot.
+    manquants = [t for t in tickers if t not in quotes]
+    infos_repli = {}
+    if manquants:
+        def _one_info(t):
+            try:
+                return t, yf.Ticker(t).info
+            except Exception:
+                return t, {}
+        with ThreadPoolExecutor(max_workers=20) as executor:
+            for t, info in executor.map(_one_info, manquants):
+                infos_repli[t] = info
+
+    # --- Entrée conseillée : uniquement si demandé, calculée en parallèle ---
+    entrees = {}
+    if compute_entry_price:
+        def _one_entree(t):
+            info_t = quotes.get(t) or infos_repli.get(t, {})
+            return t, _tdm_calc_entree_conseillee(t, info_t)
+        with ThreadPoolExecutor(max_workers=15) as executor:
+            for t, res in executor.map(_one_entree, tickers):
+                entrees[t] = res
 
     rows = []
     for t in tickers:
         try:
-            ticker_obj = yf.Ticker(t)
-            info = ticker_obj.info
+            q = quotes.get(t) or {}
+            info_repli = infos_repli.get(t, {})
 
-            if isinstance(df_prices.columns, pd.MultiIndex):
-                close_series = df_prices['Close', t].dropna() if ('Close', t) in df_prices.columns else pd.Series()
-                open_series = df_prices['Open', t].dropna() if ('Open', t) in df_prices.columns else pd.Series()
-                vol_series = df_prices['Volume', t].dropna() if ('Volume', t) in df_prices.columns else pd.Series()
-            else:
-                close_series = df_prices['Close'][t].dropna() if t in df_prices['Close'].columns else pd.Series()
-                open_series = df_prices['Open'][t].dropna() if t in df_prices['Open'].columns else pd.Series()
-                vol_series = df_prices['Volume'][t].dropna() if t in df_prices['Volume'].columns else pd.Series()
+            def _champ(nom, alt=None):
+                v = q.get(nom)
+                if v is None and alt is not None:
+                    v = q.get(alt)
+                if v is None:
+                    v = info_repli.get(nom) if info_repli.get(nom) is not None else (
+                        info_repli.get(alt) if alt else None)
+                return v
 
-            if close_series.empty: continue
+            close_series = _hist_serie(t, "Close")
+            open_series  = _hist_serie(t, "Open")
+            vol_series   = _hist_serie(t, "Volume")
+            div_series   = _hist_serie(t, "Dividends")
+
+            if close_series.empty:
+                continue
 
             p_ytd_start = float(close_series.iloc[0])
 
-            # Prix live (même source que la page Portefeuille, cf. fetch_stock_data) plutôt
-            # que la bougie du jour issue de yf.download, qui peut accuser un retard d'une
-            # session complète et donc désynchroniser "Var. Intraday" entre les deux pages.
-            live_price = info.get("currentPrice") or info.get("regularMarketPrice")
+            live_price = _champ("regularMarketPrice", "currentPrice")
             p_latest = float(live_price) if live_price else float(close_series.iloc[-1])
 
-            prev_close_live = info.get("previousClose")
-            if prev_close_live:
-                p_prev_close = float(prev_close_live)
-            else:
-                p_prev_close = float(close_series.iloc[-2]) if len(close_series) > 1 else p_latest
+            prev_close_live = _champ("regularMarketPreviousClose", "previousClose")
+            p_prev_close = float(prev_close_live) if prev_close_live else (
+                float(close_series.iloc[-2]) if len(close_series) > 1 else p_latest)
 
-            open_today_live = info.get("regularMarketOpen")
-            if open_today_live:
-                p_open_today = float(open_today_live)
-            else:
-                p_open_today = float(open_series.iloc[-1]) if not open_series.empty else p_latest
+            open_today_live = _champ("regularMarketOpen")
+            p_open_today = float(open_today_live) if open_today_live else (
+                float(open_series.iloc[-1]) if not open_series.empty else p_latest)
 
             volume_actuel = int(vol_series.iloc[-1]) if not vol_series.empty else 0
             volume_moyen = vol_series.mean() if not vol_series.empty else 0
@@ -2569,98 +2683,46 @@ def tdm_get_advanced_market_data(tickers, compute_entry_price=False):
             montant_actuel = p_latest * volume_actuel
             montant_moyen = (close_series * vol_series).mean() if not vol_series.empty else 0
 
-            reg_time = info.get('regularMarketTime')
+            reg_time = _champ("regularMarketTime")
             if reg_time and isinstance(reg_time, (int, float)):
                 timestamp_latest = datetime.fromtimestamp(reg_time).strftime('%Y-%m-%d %H:%M:%S')
-            else:
+            elif not close_series.empty:
                 timestamp_latest = close_series.index[-1].strftime('%Y-%m-%d 16:00:00')
+            else:
+                timestamp_latest = ""
 
-            div_rate = info.get('dividendRate')
+            div_rate = _champ("dividendRate")
             if div_rate and isinstance(div_rate, (int, float)) and p_latest > 0:
                 dividend_yield = (div_rate / p_latest) * 100
             else:
-                div_yield_raw = info.get('dividendYield', np.nan)
-                if not pd.isna(div_yield_raw):
+                div_yield_raw = _champ("dividendYield")
+                if div_yield_raw is not None and not pd.isna(div_yield_raw):
                     dividend_yield = div_yield_raw if div_yield_raw > 1.0 else div_yield_raw * 100
                 else:
                     dividend_yield = np.nan
 
-            # Dividendes détachés depuis le 1er janvier, pour le rendement total YTD
-            try:
-                div_series = ticker_obj.dividends
-                if div_series is not None and not div_series.empty:
-                    start_ts_div = pd.Timestamp("2026-01-01")
-                    if div_series.index.tz is not None:
-                        start_ts_div = start_ts_div.tz_localize(div_series.index.tz)
-                    dividends_ytd = float(div_series[div_series.index >= start_ts_div].sum())
-                else:
-                    dividends_ytd = 0.0
-            except Exception:
-                dividends_ytd = 0.0
+            # Dividendes détachés depuis le 1er janvier (déjà présents dans
+            # l'historique groupé grâce à actions=True, plus d'appel .dividends
+            # individuel nécessaire).
+            dividends_ytd = float(div_series.sum()) if not div_series.empty else 0.0
 
-            # --- Entrée conseillée (-15%) : même logique que la fiche détaillée
-            # (moyenne des modèles BNA Forward / FCF / Cible Analystes, puis -15%) ---
-            # Calcul optionnel : nécessite un appel cashflow supplémentaire par valeur,
-            # donc désactivé par défaut pour ne pas ralentir le chargement.
-            entree_conseillee = np.nan
-            entree_bna = np.nan
-            if compute_entry_price:
-                try:
-                    ef = info.get('forwardEps') or 0
-                    pf = info.get('forwardPE') or 15
-                    trailing_eps_row = info.get('trailingEps') or 0
-                    trailing_pe_row  = info.get('trailingPE')
+            # Bénéfice TTM : approximé via EPS TTM x actions en circulation
+            # (les deux disponibles dans le lot Yahoo), pour éviter un appel
+            # .info individuel rien que pour ce champ. Repli sur netIncomeToCommon
+            # (.info) si l'approximation n'est pas calculable.
+            eps_ttm = _champ("epsTrailingTwelveMonths")
+            shares_out = _champ("sharesOutstanding")
+            if eps_ttm is not None and shares_out is not None:
+                profit_ttm = float(eps_ttm) * float(shares_out)
+            else:
+                profit_ttm = info_repli.get("netIncomeToCommon", np.nan)
 
-                    # PER Actuel en priorité (fiable), PER historique reconstruit en repli
-                    # secondaire seulement (cf. calc_per_historique_moyen, fragile sur
-                    # certains titres).
-                    if trailing_pe_row and 5 <= trailing_pe_row <= 60:
-                        pf_valo = trailing_pe_row
-                    else:
-                        per_hist_moy_row = calc_per_historique_moyen(ticker_obj, years=5)
-                        if per_hist_moy_row and per_hist_moy_row > 0:
-                            pf_valo = per_hist_moy_row
-                        elif pf and 3 < pf <= 80:
-                            pf_valo = pf
-                        else:
-                            pf_valo = 15
-
-                    # Pondération BNA Forward (30%) / BNA Actuel (70%) : cf. fetch_stock_data
-                    # pour la justification (consensus analystes réputé optimiste).
-                    if trailing_eps_row and trailing_eps_row > 0 and ef:
-                        ef_pondere = (ef * 0.30) + (trailing_eps_row * 0.70)
-                    else:
-                        ef_pondere = ef
-
-                    ef_valo = ef_pondere
-                    if trailing_eps_row and trailing_eps_row > 0 and ef_pondere and ef_pondere > trailing_eps_row * 1.5:
-                        ef_valo = trailing_eps_row * 1.5
-
-                    vb = ef_valo * pf_valo if ef_valo else 0
-                    entree_bna = vb * 0.85 if vb > 0 else np.nan
-
-                    tm = info.get('targetMeanPrice') or 0
-
-                    sh_out = info.get('sharesOutstanding') or 0
-                    try:
-                        fcf_series = ticker_obj.cashflow.loc['Free Cash Flow'].dropna().head(3) \
-                            if 'Free Cash Flow' in ticker_obj.cashflow.index else pd.Series(dtype=float)
-                        fcf_raw = fcf_series.mean() if not fcf_series.empty else 0
-                    except Exception:
-                        fcf_raw = 0
-                    vf = (fcf_raw / sh_out * 1.05) * pf if sh_out and fcf_raw else 0
-
-                    mods = [v for v in [vb, vf, tm] if v and v > 0]
-                    fair_avg = sum(mods) / len(mods) if mods else np.nan
-                    entree_conseillee = fair_avg * 0.85 if not pd.isna(fair_avg) else np.nan
-                except Exception:
-                    entree_conseillee = np.nan
-                    entree_bna = np.nan
+            entree_conseillee, entree_bna = entrees.get(t, (np.nan, np.nan))
 
             rows.append({
                 "Ticker": t,
-                "Name": info.get('longName', t),
-                "Currency": info.get('currency') or 'USD',
+                "Name": _champ("longName", "shortName") or t,
+                "Currency": _champ("currency") or 'USD',
                 "Price": p_prev_close,
                 "IntradayReturn": ((p_latest - p_prev_close) / p_prev_close) * 100,
                 "Price_Latest": p_latest,
@@ -2673,19 +2735,19 @@ def tdm_get_advanced_market_data(tickers, compute_entry_price=False):
                 "Amount_Raw": montant_actuel,
                 "Amount_Moyen_Raw": montant_moyen,
 
-                "MarketCap_Raw": info.get('marketCap', 0),
+                "MarketCap_Raw": _champ("marketCap") or 0,
                 "YTDReturn": ((p_latest - p_ytd_start) / p_ytd_start) * 100,
                 "YTDReturnTotal": ((p_latest + dividends_ytd - p_ytd_start) / p_ytd_start) * 100,
-                "PE": info.get('trailingPE', np.nan),
-                "PB": info.get('priceToBook', np.nan),
-                "Profit_TTM_Raw": info.get('netIncomeToCommon', np.nan),
+                "PE": _champ("trailingPE") or np.nan,
+                "PB": _champ("priceToBook") or np.nan,
+                "Profit_TTM_Raw": profit_ttm,
                 "DividendYield": dividend_yield,
                 "Dividend": div_rate if div_rate else np.nan,
-                "SharesOutstanding_Raw": info.get('sharesOutstanding', np.nan),
-                "Exchange": info.get('exchange', 'N/A'),
+                "SharesOutstanding_Raw": shares_out if shares_out is not None else np.nan,
+                "Exchange": _champ("fullExchangeName", "exchange") or 'N/A',
                 "Timestamp_Latest": timestamp_latest
             })
-        except:
+        except Exception:
             continue
 
     df = pd.DataFrame(rows)
