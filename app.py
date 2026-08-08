@@ -1916,7 +1916,6 @@ def afficher_dashboard_indice(nom_indice):
         return
 
     nb_composants = len(composants)
-    st.caption(f"{nb_composants} valeurs")
 
     retry_key = f"retry_nonce_{nom_indice}"
     st.session_state.setdefault(retry_key, 0)
@@ -1992,6 +1991,12 @@ def afficher_dashboard_indice(nom_indice):
             except Exception:
                 pass
         return styles
+
+    nb_affiche = len(df_affiche)
+    st.caption(
+        f"{nb_affiche} valeur{'s' if nb_affiche != 1 else ''}"
+        + (f" sur {nb_composants}" if recherche and nb_affiche != nb_composants else "")
+    )
 
     sel = st.dataframe(
         df_affiche.style.apply(style_heatmap_indice, axis=None)
@@ -2084,6 +2089,12 @@ def afficher_dashboard_etf(etf_ticker):
         df_affiche["PB"] = df["PB"]
 
     hauteur = min((len(df_affiche) * 35) + 38, 850)
+
+    nb_affiche = len(df_affiche)
+    st.caption(
+        f"{nb_affiche} ligne{'s' if nb_affiche != 1 else ''}"
+        + (f" sur {nb_composants}" if recherche and nb_affiche != nb_composants else "")
+    )
 
     sel = st.dataframe(
         df_affiche.style.format(formatter=lambda x: clean_num(x) if isinstance(x, (int, float)) else x),
