@@ -1526,99 +1526,207 @@ def get_etf_top_holdings(etf_ticker):
     return composants, poids
 
 
+_YAHOO_QUOTE_HEADERS = {'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+
+
+def _yahoo_quote_batch(tickers, chunk_size=150, max_workers=6):
+    """
+    Interroge l'endpoint 'quote' officiel de Yahoo Finance PAR LOT (jusqu'à
+    `chunk_size` tickers dans une seule requête HTTP), au lieu d'un appel
+    séparé par titre. C'est ce qui fait toute la différence de vitesse sur un
+    gros indice (ex: S&P 500) : on passe de ~500 requêtes réseau à quelques
+    unes seulement, chacune renvoyant prix, variation du jour, volume,
+    capitalisation, PER et P/B pour tout le lot en une fois.
+    Retourne un dict {ticker: {champs...}}. Si l'appel échoue pour un lot
+    (Yahoo peut occasionnellement bloquer/rate-limiter cet endpoint), ce lot
+    est simplement absent du résultat — l'appelant doit prévoir un repli.
+    """
+    tickers = list(dict.fromkeys(tickers))  # dédoublonne en gardant l'ordre
+    resultat = {}
+
+    def _one_chunk(chunk):
+        try:
+            r = requests.get(
+                "https://query1.finance.yahoo.com/v7/finance/quote",
+                params={"symbols": ",".join(chunk)},
+                headers=_YAHOO_QUOTE_HEADERS,
+                timeout=10,
+            )
+            r.raise_for_status()
+            return r.json().get("quoteResponse", {}).get("result", [])
+        except Exception:
+            return []
+
+    chunks = [tickers[i:i + chunk_size] for i in range(0, len(tickers), chunk_size)]
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        for quotes in executor.map(_one_chunk, chunks):
+            for q in quotes:
+                sym = q.get("symbol")
+                if sym:
+                    resultat[sym] = q
+    return resultat
+
+
 @st.cache_data(ttl=300)
 def get_index_market_data(tickers_noms, max_workers=8, _nonce=0):
     """
     Prix, variation du jour, variation YTD, volume et montant échangé.
-    Récupération par titre (via yf.Ticker.history), en parallèle mais avec une
-    concurrence limitée : Yahoo Finance rate-limite agressivement les rafales de
-    requêtes simultanées, ce qui peut faire échouer TOUS les titres d'un coup
-    même si chacun fonctionne bien pris isolément. Chaque titre est retenté une
-    fois en cas d'échec transitoire.
+
+    Version optimisée : au lieu d'interroger Yahoo Finance UN TITRE À LA FOIS
+    (ce qui, sur un indice de 500 valeurs, déclenchait des centaines de
+    requêtes HTTP séquentielles/threadées avec retries et pauses), on fait :
+      1) UN seul appel groupé (par lots) à l'API "quote" de Yahoo pour le prix,
+         la variation du jour et le volume temps réel de TOUS les titres ;
+      2) UN seul téléchargement groupé (yf.download) pour l'historique YTD,
+         nécessaire au calcul de la variation YTD et des moyennes de
+         volume/montant.
+    Résultat : quelques requêtes réseau au total au lieu d'une par titre.
     Le paramètre _nonce ne sert qu'à invalider le cache Streamlit sur demande
     (bouton "Réessayer").
     """
     noms_map = dict(tickers_noms)
     tickers = [t for t, n in tickers_noms]
+    if not tickers:
+        return pd.DataFrame(), []
 
-    def _one(tk):
-        derniere_erreur = "historique insuffisant"
-        for tentative in range(2):
+    erreurs = []
+
+    # --- 1) Cours / variation jour / volume temps réel, en un seul lot ---
+    quotes = _yahoo_quote_batch(tickers)
+
+    # --- 2) Historique YTD groupé (pour VarYTD + moyennes volume/montant) ---
+    hist_all = None
+    try:
+        hist_all = yf.download(
+            tickers, period="ytd", interval="1d", group_by="ticker",
+            threads=True, progress=False, auto_adjust=False,
+        )
+    except Exception as e:
+        erreurs.append(f"Téléchargement groupé de l'historique : {e}")
+
+    def _hist_pour(tk):
+        if hist_all is None or hist_all.empty:
+            return None
+        try:
+            h = hist_all[tk] if len(tickers) > 1 else hist_all
+            h = h.dropna(subset=["Close"])
+            return h if not h.empty else None
+        except Exception:
+            return None
+
+    lignes = []
+    for tk in tickers:
+        q = quotes.get(tk, {})
+        h = _hist_pour(tk)
+
+        prix     = q.get("regularMarketPrice")
+        var_jour = q.get("regularMarketChangePercent")
+        volume   = q.get("regularMarketVolume")
+
+        var_ytd = None
+        volume_moyen = None
+        montant_moyen = None
+        if h is not None:
+            try:
+                if prix is None:
+                    prix = float(h["Close"].iloc[-1])
+                if volume is None and pd.notna(h["Volume"].iloc[-1]):
+                    volume = float(h["Volume"].iloc[-1])
+                if var_jour is None and len(h) >= 2:
+                    prix_veille = float(h["Close"].iloc[-2])
+                    var_jour = (prix - prix_veille) / prix_veille * 100
+                prix_debut_annee = float(h["Close"].iloc[0])
+                var_ytd = (prix - prix_debut_annee) / prix_debut_annee * 100
+                vol_serie = h["Volume"].dropna()
+                if not vol_serie.empty:
+                    volume_moyen = float(vol_serie.mean())
+                    montant_moyen = float((h["Close"] * h["Volume"]).dropna().mean())
+            except Exception:
+                pass
+
+        # Repli individuel (rare) : ni l'appel groupé ni l'historique n'ont
+        # fonctionné pour ce titre précis — on le retente seul, comme avant.
+        if prix is None or var_jour is None:
             try:
                 t = yf.Ticker(tk)
-                hist = t.history(period="ytd", interval="1d", auto_adjust=False)
-
-                # Le Close du dernier jour peut être NaN chez Yahoo alors que le Volume
-                # est déjà présent (constaté sur ASML.AS) : on le complète avec le prix
-                # "live" de fast_info (accès par attribut — fast_info.get() ne renvoie
-                # rien de fiable sur cet objet) plutôt que de supprimer toute la ligne,
-                # ce qui ferait retomber Prix/Var Jour sur l'avant-veille.
-                if not hist.empty and pd.isna(hist["Close"].iloc[-1]):
-                    try:
-                        prix_live = getattr(t.fast_info, "last_price", None)
-                        if prix_live:
-                            hist.loc[hist.index[-1], "Close"] = float(prix_live)
-                    except Exception:
-                        pass
-
-                hist = hist.dropna(subset=["Close"])
-                if len(hist) < 2:
-                    time.sleep(0.3 * (tentative + 1))
-                    continue
-
-                prix             = float(hist["Close"].iloc[-1])
-                prix_veille      = float(hist["Close"].iloc[-2])
-                prix_debut_annee = float(hist["Close"].iloc[0])
-                var_jour = (prix - prix_veille) / prix_veille * 100
-                var_ytd  = (prix - prix_debut_annee) / prix_debut_annee * 100
-                volume   = float(hist["Volume"].iloc[-1]) if pd.notna(hist["Volume"].iloc[-1]) else 0.0
-                vol_serie = hist["Volume"].dropna()
-                volume_moyen = float(vol_serie.mean()) if not vol_serie.empty else 0.0
-                montant = volume * prix
-                montant_moyen = float((hist["Close"] * hist["Volume"]).dropna().mean()) if not vol_serie.empty else 0.0
-                return {
-                    "Ticker": tk,
-                    "Nom": noms_map.get(tk, tk),
-                    "Prix": prix,
-                    "VarJourNum": var_jour,
-                    "VarYTDNum": var_ytd,
-                    "Volume": volume,
-                    "VolumeMoyen": volume_moyen,
-                    "Montant": montant,
-                    "MontantMoyen": montant_moyen,
-                }, None
+                hist = t.history(period="ytd", interval="1d", auto_adjust=False).dropna(subset=["Close"])
+                if len(hist) >= 2:
+                    prix = float(hist["Close"].iloc[-1])
+                    prix_veille = float(hist["Close"].iloc[-2])
+                    var_jour = (prix - prix_veille) / prix_veille * 100
+                    prix_debut_annee = float(hist["Close"].iloc[0])
+                    var_ytd = (prix - prix_debut_annee) / prix_debut_annee * 100
+                    volume = float(hist["Volume"].iloc[-1]) if pd.notna(hist["Volume"].iloc[-1]) else 0.0
+                    vol_serie = hist["Volume"].dropna()
+                    volume_moyen = float(vol_serie.mean()) if not vol_serie.empty else 0.0
+                    montant_moyen = float((hist["Close"] * hist["Volume"]).dropna().mean()) if not vol_serie.empty else 0.0
             except Exception as e:
-                derniere_erreur = str(e)
-                time.sleep(0.5 * (tentative + 1))
-        return None, f"{tk} : {derniere_erreur}"
+                erreurs.append(f"{tk} : {e}")
+                continue
 
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        resultats = list(executor.map(_one, tickers))
+        if prix is None or var_jour is None:
+            erreurs.append(f"{tk} : données insuffisantes")
+            continue
 
-    lignes  = [r for r, err in resultats if r is not None]
-    erreurs = [err for r, err in resultats if err is not None]
+        volume = volume or 0.0
+        lignes.append({
+            "Ticker": tk,
+            "Nom": noms_map.get(tk, tk),
+            "Prix": prix,
+            "VarJourNum": var_jour,
+            "VarYTDNum": var_ytd if var_ytd is not None else 0.0,
+            "Volume": volume,
+            "VolumeMoyen": volume_moyen if volume_moyen is not None else volume,
+            "Montant": volume * prix,
+            "MontantMoyen": montant_moyen if montant_moyen is not None else (volume * prix),
+        })
+
     return pd.DataFrame(lignes), erreurs[:5]
 
 
 @st.cache_data(ttl=3600)
 def get_index_fondamentaux(tickers, max_workers=20):
-    """Capitalisation, PER, PB — un appel .info par titre (plus lent, mis en cache 1h)."""
+    """
+    Capitalisation, PER, PB — récupérés via l'appel groupé Yahoo (`_yahoo_quote_batch`)
+    au lieu d'un `yf.Ticker(tk).info` par titre. C'est le principal gain de vitesse :
+    `.info` déclenche plusieurs requêtes internes par titre chez yfinance et peut
+    prendre 1 à 2 secondes PAR TITRE, soit plusieurs minutes sur un gros indice.
+    Repli individuel (`.info`) uniquement pour les titres absents du lot Yahoo.
+    """
+    quotes = _yahoo_quote_batch(tickers)
 
-    def _one(tk):
-        try:
-            info = yf.Ticker(tk).info
-            return {
+    manquants = [tk for tk in tickers if tk not in quotes]
+    infos_repli = {}
+    if manquants:
+        def _one(tk):
+            try:
+                info = yf.Ticker(tk).info
+                return tk, {
+                    "MarketCap": info.get("marketCap"),
+                    "PE": info.get("trailingPE"),
+                    "PB": info.get("priceToBook"),
+                }
+            except Exception:
+                return tk, {"MarketCap": None, "PE": None, "PB": None}
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            for tk, vals in executor.map(_one, manquants):
+                infos_repli[tk] = vals
+
+    lignes = []
+    for tk in tickers:
+        q = quotes.get(tk)
+        if q is not None:
+            lignes.append({
                 "Ticker": tk,
-                "MarketCap": info.get("marketCap"),
-                "PE": info.get("trailingPE"),
-                "PB": info.get("priceToBook"),
-            }
-        except Exception:
-            return {"Ticker": tk, "MarketCap": None, "PE": None, "PB": None}
-
-    with ThreadPoolExecutor(max_workers=max_workers) as executor:
-        resultats = list(executor.map(_one, tickers))
-    return pd.DataFrame(resultats)
+                "MarketCap": q.get("marketCap"),
+                "PE": q.get("trailingPE"),
+                "PB": q.get("priceToBook"),
+            })
+        else:
+            vals = infos_repli.get(tk, {"MarketCap": None, "PE": None, "PB": None})
+            lignes.append({"Ticker": tk, **vals})
+    return pd.DataFrame(lignes)
 
 
 def style_heatmap_indice(df):

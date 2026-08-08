@@ -1,0 +1,3 @@
+git add app.py 
+git commit -m "optimisation et mise en place de nouveaux indicateurs"
+git push origin main 
