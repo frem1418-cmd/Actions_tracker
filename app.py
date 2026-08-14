@@ -177,10 +177,21 @@ def get_bundle_news(liste_tickers, ticker_to_name):
 
 
 @st.cache_data(ttl=86400)
+def _get_action_name_cached(ticker, nom):
+    # Séparé de get_action_name() pour ne mettre en cache (24h) que les
+    # noms réellement trouvés — jamais le repli "ticker", qui doit pouvoir
+    # être retenté au prochain appel plutôt que rester figé une journée.
+    return nom
+
+
 def get_action_name(ticker):
     try:
-        return yf.Ticker(ticker).info.get('longName', ticker)
-    except:
+        info = yf.Ticker(ticker).info
+        nom = info.get('longName') or info.get('shortName')
+        if nom:
+            return _get_action_name_cached(ticker, nom)
+        return ticker
+    except Exception:
         return ticker
 
 
@@ -2618,8 +2629,15 @@ def tdm_get_advanced_market_data(tickers, compute_entry_price=False):
     # --- Un seul appel groupé (par lots) pour l'essentiel des champs fondamentaux ---
     quotes = _yahoo_quote_batch(tickers)
 
-    # Repli individuel — en parallèle — uniquement pour les titres absents du lot.
-    manquants = [t for t in tickers if t not in quotes]
+    # Repli individuel — en parallèle — pour les titres absents du lot OU
+    # présents mais sans nom (fréquent sur les marchés non-US : .HK, .KS,
+    # .NS... où l'endpoint groupé Yahoo renvoie le prix mais omet souvent
+    # longName/shortName — c'est ce qui causait l'affichage du ticker à la
+    # place du nom, de façon intermittente selon ce que Yahoo renvoyait).
+    manquants = [
+        t for t in tickers
+        if t not in quotes or not (quotes[t].get("longName") or quotes[t].get("shortName"))
+    ]
     infos_repli = {}
     if manquants:
         def _one_info(t):
