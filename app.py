@@ -2563,9 +2563,16 @@ def _tdm_calc_entree_conseillee(ticker_symbol, info):
     """
     try:
         ticker_obj = yf.Ticker(ticker_symbol)
-        ef = info.get('forwardEps') or 0
+        # NB : selon la source, `info` peut être soit un résultat de l'API "quote"
+        # groupée (_yahoo_quote_batch), qui nomme ces champs `epsForward` /
+        # `epsTrailingTwelveMonths`, soit un `.info` (quoteSummary) individuel, qui
+        # les nomme `forwardEps` / `trailingEps`. Sans ce repli, `ef` et
+        # `trailing_eps_row` valaient toujours 0 pour les titres résolus via le lot
+        # groupé (la quasi-totalité une fois le crumb Yahoo fonctionnel), ce qui
+        # forçait "Entrée BNA -15%" à None pour tout le monde.
+        ef = info.get('forwardEps') or info.get('epsForward') or 0
         pf = info.get('forwardPE') or 15
-        trailing_eps_row = info.get('trailingEps') or 0
+        trailing_eps_row = info.get('trailingEps') or info.get('epsTrailingTwelveMonths') or 0
         trailing_pe_row  = info.get('trailingPE')
 
         if trailing_pe_row and 5 <= trailing_pe_row <= 60:
