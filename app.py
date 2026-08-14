@@ -2532,9 +2532,14 @@ def _tdm_calc_entree_conseillee(ticker_symbol, info):
     """
     try:
         ticker_obj = yf.Ticker(ticker_symbol)
-        ef = info.get('forwardEps') or 0
+        # NB : `info` peut venir soit du dict `.info` de yfinance (clés "forwardEps" /
+        # "trailingEps"), soit de l'appel groupé brut à l'API Yahoo `_yahoo_quote_batch`
+        # (clés "epsForward" / "epsTrailingTwelveMonths"). Sans ce repli sur les deux
+        # noms de clés, le BNA restait toujours à 0 pour les titres issus du lot Yahoo
+        # (le cas de tout le tableau des indices), ce qui vidait "Entrée BNA -15%".
+        ef = info.get('forwardEps') or info.get('epsForward') or 0
         pf = info.get('forwardPE') or 15
-        trailing_eps_row = info.get('trailingEps') or 0
+        trailing_eps_row = info.get('trailingEps') or info.get('epsTrailingTwelveMonths') or 0
         trailing_pe_row  = info.get('trailingPE')
 
         if trailing_pe_row and 5 <= trailing_pe_row <= 60:
