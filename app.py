@@ -1444,11 +1444,11 @@ def get_index_constituents(nom_indice):
         col_nom = next((c for c in cfg["col_nom_candidates"] if c in cols), None)
 
         tickers_bruts = table[col_ticker].astype(str).str.strip().tolist()
-        noms = table[col_nom].astype(str).str.strip().tolist() if col_nom else tickers_bruts
+        noms_wiki = table[col_nom].astype(str).str.strip().tolist() if col_nom else None
 
         suffixe = cfg["suffixe_yf"]
-        resultat = []
-        for tk, nom in zip(tickers_bruts, noms):
+        tickers_propres = []
+        for tk in tickers_bruts:
             tk_propre = tk
             if suffixe:
                 # Indices non-US : Wikipedia liste déjà le ticker Yahoo complet avec son
@@ -1462,8 +1462,28 @@ def get_index_constituents(nom_indice):
                 # Indices US : Yahoo utilise un tiret pour les classes d'actions
                 # (ex: BRK.B -> BRK-B)
                 tk_propre = tk_propre.replace(".", "-")
-            resultat.append((tk_propre, nom))
-        return resultat
+            tickers_propres.append(tk_propre)
+
+        # Repli : si la colonne "nom" de Wikipedia est introuvable (structure de
+        # page modifiée) ou ne contient en réalité que les tickers recopiés,
+        # on va chercher les vrais noms de sociétés via Yahoo Finance plutôt que
+        # d'afficher le ticker à la place du nom. C'est ce qui causait le bug
+        # observé, de façon intermittente selon la mise en cache Wikipedia (24h).
+        noms_invalides = noms_wiki is None or all(
+            n.strip().upper() == tk.strip().upper() for n, tk in zip(noms_wiki, tickers_bruts)
+        )
+        if noms_invalides:
+            quotes_noms = _yahoo_quote_batch(tickers_propres)
+            noms = [
+                (quotes_noms.get(tk, {}).get("longName")
+                 or quotes_noms.get(tk, {}).get("shortName")
+                 or tk)
+                for tk in tickers_propres
+            ]
+        else:
+            noms = noms_wiki
+
+        return list(zip(tickers_propres, noms))
 
     st.warning(f"Structure de page inattendue pour {nom_indice} — composants introuvables.")
     return []
