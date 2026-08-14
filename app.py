@@ -2656,15 +2656,25 @@ def tdm_get_advanced_market_data(tickers, compute_entry_price=False):
     # --- Un seul appel groupé (par lots) pour l'essentiel des champs fondamentaux ---
     quotes = _yahoo_quote_batch(tickers)
 
-    # Repli individuel — en parallèle — pour les titres absents du lot OU
-    # présents mais sans nom (fréquent sur les marchés non-US : .HK, .KS,
-    # .NS... où l'endpoint groupé Yahoo renvoie le prix mais omet souvent
-    # longName/shortName — c'est ce qui causait l'affichage du ticker à la
-    # place du nom, de façon intermittente selon ce que Yahoo renvoyait).
-    manquants = [
-        t for t in tickers
-        if t not in quotes or not (quotes[t].get("longName") or quotes[t].get("shortName"))
-    ]
+    # Repli individuel — en parallèle — pour les titres absents du lot OU dont
+    # les champs qu'on utilise plus loin sont incomplets. Beaucoup de marchés
+    # non-US (Euronext .PA/.AS, Xetra .DE, Bolsa .MC, .HK, .KS, .NS...) ont un
+    # prix renvoyé par l'appel groupé Yahoo mais PAS forcément le nom, la
+    # devise ou les BPA (epsForward/epsTrailingTwelveMonths) — d'où le Nom
+    # affiché = Ticker, la Devise par défaut 'USD', et l'Entrée Conseillée /
+    # Entrée BNA à None qu'on observait sur certains indices.
+    def _quote_incomplete(q):
+        if not q:
+            return True
+        if not (q.get("longName") or q.get("shortName")):
+            return True
+        if q.get("currency") is None:
+            return True
+        if q.get("epsForward") is None and q.get("epsTrailingTwelveMonths") is None:
+            return True
+        return False
+
+    manquants = [t for t in tickers if t not in quotes or _quote_incomplete(quotes[t])]
     infos_repli = {}
     if manquants:
         def _one_info(t):
@@ -2680,7 +2690,13 @@ def tdm_get_advanced_market_data(tickers, compute_entry_price=False):
     entrees = {}
     if compute_entry_price:
         def _one_entree(t):
-            info_t = quotes.get(t) or infos_repli.get(t, {})
+            # IMPORTANT : fusionner les deux sources plutôt que choisir l'une
+            # OU l'autre avec `or` — sinon, dès que `quotes[t]` contient
+            # ne serait-ce qu'un prix, tout le repli individuel (souvent plus
+            # complet sur les BPA/PER/devise) était silencieusement ignoré.
+            q_t = quotes.get(t) or {}
+            i_t = infos_repli.get(t) or {}
+            info_t = {**q_t, **{k: v for k, v in i_t.items() if v is not None}}
             return t, _tdm_calc_entree_conseillee(t, info_t)
         with ThreadPoolExecutor(max_workers=15) as executor:
             for t, res in executor.map(_one_entree, tickers):
