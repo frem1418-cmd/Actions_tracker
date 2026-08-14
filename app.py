@@ -1228,7 +1228,7 @@ def afficher_detail_action(d):
 
                 st.plotly_chart(
                     fig,
-                    use_container_width=True,
+                    width='stretch',
                     config={
                         'scrollZoom': True,
                         'displayModeBar': True,
@@ -1844,7 +1844,7 @@ def afficher_graphique_indice(symbole_yf, nom_indice):
         fig.update_yaxes(title_text="Prix", row=1, col=1)
         st.plotly_chart(
             fig,
-            use_container_width=True,
+            width='stretch',
             config={'scrollZoom': True, 'displaylogo': False}
         )
 
@@ -2889,7 +2889,7 @@ def afficher_tableau_de_bord_marche():
 
             preset_cols = st.columns(2)
             for i, (label, tickers_preset) in enumerate(TDM_COMPARE_PRESETS.items()):
-                if preset_cols[i % 2].button(label, key=f"tdm_preset_{i}", use_container_width=True):
+                if preset_cols[i % 2].button(label, key=f"tdm_preset_{i}", width='stretch'):
                     st.session_state["tdm_compare_selection"] = [
                         n for n in tickers_preset if n in TDM_INDEX_TICKER_MAP
                     ]
@@ -2980,7 +2980,7 @@ def afficher_tableau_de_bord_marche():
             )
             st.plotly_chart(
                 fig_compare,
-                use_container_width=True,
+                width='stretch',
                 config={
                     'scrollZoom': True,
                     'displayModeBar': True,
@@ -3035,7 +3035,7 @@ def afficher_tableau_de_bord_marche():
 
             st.plotly_chart(
                 fig,
-                use_container_width=True,
+                width='stretch',
                 config={
                     'scrollZoom': True,
                     'displayModeBar': True,
@@ -3187,7 +3187,7 @@ def afficher_tableau_de_bord_marche():
                 data=df_export.to_csv(index=False, sep=';').encode('utf-8-sig'),
                 file_name=f"{nom_fichier}_composition.csv",
                 mime="text/csv",
-                use_container_width=True,
+                width='stretch',
                 key="tdm_export_csv"
             )
         with col_export2:
@@ -3200,7 +3200,7 @@ def afficher_tableau_de_bord_marche():
                     data=excel_buffer.getvalue(),
                     file_name=f"{nom_fichier}_composition.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    use_container_width=True,
+                    width='stretch',
                     key="tdm_export_xlsx"
                 )
             except Exception:
@@ -3211,7 +3211,7 @@ def afficher_tableau_de_bord_marche():
 
         sel_marche = st.dataframe(
             df_styled,
-            use_container_width=True,
+            width='stretch',
             hide_index=True,
             height=600,
             column_order=cols_to_display,
@@ -3659,11 +3659,15 @@ if t_list:
 
     if data_res:
         df = pd.DataFrame(data_res)
-        df['Date Détachement'] = pd.to_datetime(df['Date Détachement'], errors='coerce', dayfirst=True)
+        # format='mixed' : les dates viennent de sources hétérogènes (formats non uniformes
+        # selon les titres/API) ; sans le préciser, pandas retombe sur un parsing élément par
+        # élément via dateutil (lent + UserWarning à chaque exécution). 'mixed' garde le même
+        # comportement (dayfirst respecté, valeurs invalides -> NaT) mais sans l'avertissement.
+        df['Date Détachement'] = pd.to_datetime(df['Date Détachement'], errors='coerce', dayfirst=True, format='mixed')
         if 'Date Versement Dividende' in df.columns:
-            df['Date Versement Dividende'] = pd.to_datetime(df['Date Versement Dividende'], errors='coerce', dayfirst=True)
+            df['Date Versement Dividende'] = pd.to_datetime(df['Date Versement Dividende'], errors='coerce', dayfirst=True, format='mixed')
         if 'Prochains Résultats' in df.columns:
-            df['Prochains Résultats'] = pd.to_datetime(df['Prochains Résultats'], errors='coerce', dayfirst=True)
+            df['Prochains Résultats'] = pd.to_datetime(df['Prochains Résultats'], errors='coerce', dayfirst=True, format='mixed')
         ticker_to_name = dict(zip(df['Ticker'], df['Nom']))
 
         # Colonnes internes à masquer du tableau
