@@ -177,21 +177,10 @@ def get_bundle_news(liste_tickers, ticker_to_name):
 
 
 @st.cache_data(ttl=86400)
-def _get_action_name_cached(ticker, nom):
-    # Séparé de get_action_name() pour ne mettre en cache (24h) que les
-    # noms réellement trouvés — jamais le repli "ticker", qui doit pouvoir
-    # être retenté au prochain appel plutôt que rester figé une journée.
-    return nom
-
-
 def get_action_name(ticker):
     try:
-        info = yf.Ticker(ticker).info
-        nom = info.get('longName') or info.get('shortName')
-        if nom:
-            return _get_action_name_cached(ticker, nom)
-        return ticker
-    except Exception:
+        return yf.Ticker(ticker).info.get('longName', ticker)
+    except:
         return ticker
 
 
@@ -1239,7 +1228,7 @@ def afficher_detail_action(d):
 
                 st.plotly_chart(
                     fig,
-                    width='stretch',
+                    use_container_width=True,
                     config={
                         'scrollZoom': True,
                         'displayModeBar': True,
@@ -1444,11 +1433,11 @@ def get_index_constituents(nom_indice):
         col_nom = next((c for c in cfg["col_nom_candidates"] if c in cols), None)
 
         tickers_bruts = table[col_ticker].astype(str).str.strip().tolist()
-        noms_wiki = table[col_nom].astype(str).str.strip().tolist() if col_nom else None
+        noms = table[col_nom].astype(str).str.strip().tolist() if col_nom else tickers_bruts
 
         suffixe = cfg["suffixe_yf"]
-        tickers_propres = []
-        for tk in tickers_bruts:
+        resultat = []
+        for tk, nom in zip(tickers_bruts, noms):
             tk_propre = tk
             if suffixe:
                 # Indices non-US : Wikipedia liste déjà le ticker Yahoo complet avec son
@@ -1462,28 +1451,8 @@ def get_index_constituents(nom_indice):
                 # Indices US : Yahoo utilise un tiret pour les classes d'actions
                 # (ex: BRK.B -> BRK-B)
                 tk_propre = tk_propre.replace(".", "-")
-            tickers_propres.append(tk_propre)
-
-        # Repli : si la colonne "nom" de Wikipedia est introuvable (structure de
-        # page modifiée) ou ne contient en réalité que les tickers recopiés,
-        # on va chercher les vrais noms de sociétés via Yahoo Finance plutôt que
-        # d'afficher le ticker à la place du nom. C'est ce qui causait le bug
-        # observé, de façon intermittente selon la mise en cache Wikipedia (24h).
-        noms_invalides = noms_wiki is None or all(
-            n.strip().upper() == tk.strip().upper() for n, tk in zip(noms_wiki, tickers_bruts)
-        )
-        if noms_invalides:
-            quotes_noms = _yahoo_quote_batch(tickers_propres)
-            noms = [
-                (quotes_noms.get(tk, {}).get("longName")
-                 or quotes_noms.get(tk, {}).get("shortName")
-                 or tk)
-                for tk in tickers_propres
-            ]
-        else:
-            noms = noms_wiki
-
-        return list(zip(tickers_propres, noms))
+            resultat.append((tk_propre, nom))
+        return resultat
 
     st.warning(f"Structure de page inattendue pour {nom_indice} — composants introuvables.")
     return []
@@ -1875,7 +1844,7 @@ def afficher_graphique_indice(symbole_yf, nom_indice):
         fig.update_yaxes(title_text="Prix", row=1, col=1)
         st.plotly_chart(
             fig,
-            width='stretch',
+            use_container_width=True,
             config={'scrollZoom': True, 'displaylogo': False}
         )
 
@@ -2563,16 +2532,9 @@ def _tdm_calc_entree_conseillee(ticker_symbol, info):
     """
     try:
         ticker_obj = yf.Ticker(ticker_symbol)
-        # NB : selon la source, `info` peut être soit un résultat de l'API "quote"
-        # groupée (_yahoo_quote_batch), qui nomme ces champs `epsForward` /
-        # `epsTrailingTwelveMonths`, soit un `.info` (quoteSummary) individuel, qui
-        # les nomme `forwardEps` / `trailingEps`. Sans ce repli, `ef` et
-        # `trailing_eps_row` valaient toujours 0 pour les titres résolus via le lot
-        # groupé (la quasi-totalité une fois le crumb Yahoo fonctionnel), ce qui
-        # forçait "Entrée BNA -15%" à None pour tout le monde.
-        ef = info.get('forwardEps') or info.get('epsForward') or 0
+        ef = info.get('forwardEps') or 0
         pf = info.get('forwardPE') or 15
-        trailing_eps_row = info.get('trailingEps') or info.get('epsTrailingTwelveMonths') or 0
+        trailing_eps_row = info.get('trailingEps') or 0
         trailing_pe_row  = info.get('trailingPE')
 
         if trailing_pe_row and 5 <= trailing_pe_row <= 60:
@@ -2656,25 +2618,8 @@ def tdm_get_advanced_market_data(tickers, compute_entry_price=False):
     # --- Un seul appel groupé (par lots) pour l'essentiel des champs fondamentaux ---
     quotes = _yahoo_quote_batch(tickers)
 
-    # Repli individuel — en parallèle — pour les titres absents du lot OU dont
-    # les champs qu'on utilise plus loin sont incomplets. Beaucoup de marchés
-    # non-US (Euronext .PA/.AS, Xetra .DE, Bolsa .MC, .HK, .KS, .NS...) ont un
-    # prix renvoyé par l'appel groupé Yahoo mais PAS forcément le nom, la
-    # devise ou les BPA (epsForward/epsTrailingTwelveMonths) — d'où le Nom
-    # affiché = Ticker, la Devise par défaut 'USD', et l'Entrée Conseillée /
-    # Entrée BNA à None qu'on observait sur certains indices.
-    def _quote_incomplete(q):
-        if not q:
-            return True
-        if not (q.get("longName") or q.get("shortName")):
-            return True
-        if q.get("currency") is None:
-            return True
-        if q.get("epsForward") is None and q.get("epsTrailingTwelveMonths") is None:
-            return True
-        return False
-
-    manquants = [t for t in tickers if t not in quotes or _quote_incomplete(quotes[t])]
+    # Repli individuel — en parallèle — uniquement pour les titres absents du lot.
+    manquants = [t for t in tickers if t not in quotes]
     infos_repli = {}
     if manquants:
         def _one_info(t):
@@ -2690,13 +2635,7 @@ def tdm_get_advanced_market_data(tickers, compute_entry_price=False):
     entrees = {}
     if compute_entry_price:
         def _one_entree(t):
-            # IMPORTANT : fusionner les deux sources plutôt que choisir l'une
-            # OU l'autre avec `or` — sinon, dès que `quotes[t]` contient
-            # ne serait-ce qu'un prix, tout le repli individuel (souvent plus
-            # complet sur les BPA/PER/devise) était silencieusement ignoré.
-            q_t = quotes.get(t) or {}
-            i_t = infos_repli.get(t) or {}
-            info_t = {**q_t, **{k: v for k, v in i_t.items() if v is not None}}
+            info_t = quotes.get(t) or infos_repli.get(t, {})
             return t, _tdm_calc_entree_conseillee(t, info_t)
         with ThreadPoolExecutor(max_workers=15) as executor:
             for t, res in executor.map(_one_entree, tickers):
@@ -2945,7 +2884,7 @@ def afficher_tableau_de_bord_marche():
 
             preset_cols = st.columns(2)
             for i, (label, tickers_preset) in enumerate(TDM_COMPARE_PRESETS.items()):
-                if preset_cols[i % 2].button(label, key=f"tdm_preset_{i}", width='stretch'):
+                if preset_cols[i % 2].button(label, key=f"tdm_preset_{i}", use_container_width=True):
                     st.session_state["tdm_compare_selection"] = [
                         n for n in tickers_preset if n in TDM_INDEX_TICKER_MAP
                     ]
@@ -3036,7 +2975,7 @@ def afficher_tableau_de_bord_marche():
             )
             st.plotly_chart(
                 fig_compare,
-                width='stretch',
+                use_container_width=True,
                 config={
                     'scrollZoom': True,
                     'displayModeBar': True,
@@ -3091,7 +3030,7 @@ def afficher_tableau_de_bord_marche():
 
             st.plotly_chart(
                 fig,
-                width='stretch',
+                use_container_width=True,
                 config={
                     'scrollZoom': True,
                     'displayModeBar': True,
@@ -3243,7 +3182,7 @@ def afficher_tableau_de_bord_marche():
                 data=df_export.to_csv(index=False, sep=';').encode('utf-8-sig'),
                 file_name=f"{nom_fichier}_composition.csv",
                 mime="text/csv",
-                width='stretch',
+                use_container_width=True,
                 key="tdm_export_csv"
             )
         with col_export2:
@@ -3256,7 +3195,7 @@ def afficher_tableau_de_bord_marche():
                     data=excel_buffer.getvalue(),
                     file_name=f"{nom_fichier}_composition.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                    width='stretch',
+                    use_container_width=True,
                     key="tdm_export_xlsx"
                 )
             except Exception:
@@ -3267,7 +3206,7 @@ def afficher_tableau_de_bord_marche():
 
         sel_marche = st.dataframe(
             df_styled,
-            width='stretch',
+            use_container_width=True,
             hide_index=True,
             height=600,
             column_order=cols_to_display,
@@ -3715,11 +3654,11 @@ if t_list:
 
     if data_res:
         df = pd.DataFrame(data_res)
-        df['Date Détachement'] = pd.to_datetime(df['Date Détachement'], errors='coerce', format='mixed', dayfirst=True)
+        df['Date Détachement'] = pd.to_datetime(df['Date Détachement'], errors='coerce', dayfirst=True)
         if 'Date Versement Dividende' in df.columns:
-            df['Date Versement Dividende'] = pd.to_datetime(df['Date Versement Dividende'], errors='coerce', format='mixed', dayfirst=True)
+            df['Date Versement Dividende'] = pd.to_datetime(df['Date Versement Dividende'], errors='coerce', dayfirst=True)
         if 'Prochains Résultats' in df.columns:
-            df['Prochains Résultats'] = pd.to_datetime(df['Prochains Résultats'], errors='coerce', format='mixed', dayfirst=True)
+            df['Prochains Résultats'] = pd.to_datetime(df['Prochains Résultats'], errors='coerce', dayfirst=True)
         ticker_to_name = dict(zip(df['Ticker'], df['Nom']))
 
         # Colonnes internes à masquer du tableau
