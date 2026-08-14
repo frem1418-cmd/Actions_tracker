@@ -1,5 +1,6 @@
 streamlit
-yfinance>=0.2.40
+yfinance>=1.6.0
+curl_cffi
 pandas
 requests
 textblob
