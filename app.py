@@ -15,10 +15,37 @@ from bs4 import BeautifulSoup
 import streamlit as st
 from streamlit_gsheets import GSheetsConnection
 from deep_translator import GoogleTranslator
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor as _BaseThreadPoolExecutor
+import threading
 import urllib.parse
 import logging
+from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
 logging.getLogger("streamlit").setLevel(logging.ERROR)
+# Les 401/"Invalid Crumb" qu'on voit dans les logs viennent de l'endpoint Yahoo
+# (bloqué/rate-limité par intermittence sur les IP "cloud" comme Streamlit Cloud) :
+# le code a déjà un repli automatique (historique yfinance, puis appel individuel)
+# quand ça échoue, donc ce n'est pas un bug fonctionnel — juste yfinance qui logge
+# chaque échec en ERROR. On baisse son niveau de log pour ne garder que l'essentiel.
+logging.getLogger("yfinance").setLevel(logging.CRITICAL)
+
+
+class ThreadPoolExecutor(_BaseThreadPoolExecutor):
+    """Remplace concurrent.futures.ThreadPoolExecutor partout dans ce fichier : propage
+    le ScriptRunContext de Streamlit à chaque thread du pool. Sans ça, Streamlit logue
+    un warning 'missing ScriptRunContext!' pour chaque thread créé pendant l'exécution
+    du script (visible dans les logs Streamlit Cloud) — inoffensif mais bruyant.
+    `Executor.map()` appelle `submit()` en interne, donc override suffit pour couvrir
+    tous les usages (map ET submit) sans toucher aux appels existants."""
+
+    def submit(self, fn, *args, **kwargs):
+        ctx = get_script_run_ctx()
+
+        def _wrapped(*a, **kw):
+            if ctx is not None:
+                add_script_run_ctx(threading.current_thread(), ctx)
+            return fn(*a, **kw)
+
+        return super().submit(_wrapped, *args, **kwargs)
 
 # Session HTTP interne de yfinance : elle gère automatiquement le "crumb"/cookie
 # désormais exigé par Yahoo Finance sur ses endpoints (query1/query2). En
@@ -2157,6 +2184,18 @@ TDM_TICKERS_CAC40 = [
 
 # NOTE : compositions indicatives (hors S&P 500 complet à 500 lignes, non praticable
 # en appels yfinance individuels). À ajuster si besoin.
+TDM_TICKERS_SBF120 = TDM_TICKERS_CAC40 + [
+    # CAC Next 20 + principales valeurs moyennes du CAC Mid 60 (échantillon indicatif :
+    # le SBF 120 est révisé trimestriellement par Euronext, composition complète non
+    # praticable en dur — même remarque que pour le Russell 2000 / MSCI World plus bas).
+    "AMUN.PA", "RXL.PA", "GET.PA", "FGR.PA", "GFC.PA", "IPN.PA", "SOP.PA", "BVI.PA",
+    "ELIS.PA", "LI.PA", "NEX.PA", "RCO.PA", "DEC.PA", "COFA.PA", "UBI.PA", "FR.PA",
+    "ATE.PA", "NEOEN.PA", "ILD.PA", "AF.PA", "VK.PA", "TE.PA", "ENX.PA", "VRLA.PA",
+    "MF.PA", "FDJ.PA", "SCR.PA", "RBT.PA", "ITP.PA", "TRI.PA", "VCT.PA", "BB.PA",
+    "CGG.PA", "DBG.PA", "GTT.PA", "NXI.PA", "RUI.PA", "SPIE.PA", "SW.PA", "MRN.PA",
+    "POM.PA", "TFI.PA", "SEV.PA", "LTA.PA",
+]
+
 TDM_TICKERS_DAX = [
     "ADS.DE", "ALV.DE", "BAS.DE", "BAYN.DE", "BEI.DE", "BMW.DE", "BNR.DE", "CON.DE",
     "1COV.DE", "DBK.DE", "DB1.DE", "DHL.DE", "DTE.DE", "EOAN.DE", "FRE.DE", "HNR1.DE",
@@ -2260,6 +2299,7 @@ TDM_TICKERS_KOSPI = [
 TDM_INDEX_TICKER_MAP = {
     "NASDAQ 100 Tech": TDM_TICKERS_NASDAQ,
     "CAC 40 (France)": TDM_TICKERS_CAC40,
+    "SBF 120 (France)": TDM_TICKERS_SBF120,
     "DAX (Allemagne)": TDM_TICKERS_DAX,
     "S&P 500 Lite (USA)": TDM_TICKERS_SP500,
     "S&P 500 Full (USA)": TDM_TICKERS_SP500,
@@ -2313,6 +2353,7 @@ def tdm_resolve_index_tickers(nom_indice_tdm):
 TDM_SYMBOL_MAP = {
     "NASDAQ 100 Tech": "^NDX",
     "CAC 40 (France)": "^FCHI",
+    "SBF 120 (France)": "^SBF120",
     "DAX (Allemagne)": "^GDAXI",
     "S&P 500 Lite (USA)": "^GSPC",
     "S&P 500 Full (USA)": "^GSPC",
