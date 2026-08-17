@@ -20,6 +20,7 @@ import threading
 import urllib.parse
 import logging
 from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
+import streamlit.components.v1 as components
 logging.getLogger("streamlit").setLevel(logging.ERROR)
 # Les 401/"Invalid Crumb" qu'on voit dans les logs viennent de l'endpoint Yahoo
 # (bloqué/rate-limité par intermittence sur les IP "cloud" comme Streamlit Cloud) :
@@ -3393,6 +3394,107 @@ st.markdown("""
     }
     </style>
 """, unsafe_allow_html=True)
+
+# =======================================================================
+# BARRE D'HEURES DISCRÈTE (Paris / NYSE-NASDAQ) — MàJ live côté client (JS)
+# =======================================================================
+
+def afficher_barre_horaires_bourses():
+    components.html(
+        """
+        <div id="mc-bar" style="
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            font-size: 12px;
+            color: #64748b;
+            background: #f8fafc;
+            border: 1px solid #e2e8f0;
+            border-radius: 8px;
+            padding: 5px 12px;
+            margin-bottom: 6px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 18px;
+            flex-wrap: wrap;
+            line-height: 1.4;
+        ">
+          <span id="mc-paris"></span>
+          <span style="color:#cbd5e1;">|</span>
+          <span id="mc-ny"></span>
+          <span style="color:#cbd5e1;">|</span>
+          <span id="mc-tokyo"></span>
+          <span style="color:#cbd5e1;">|</span>
+          <span id="mc-india"></span>
+        </div>
+        <script>
+        function mcPad(n) { return n.toString().padStart(2, '0'); }
+
+        function mcZonedParts(tz) {
+            const now = new Date();
+            const fmt = new Intl.DateTimeFormat('en-US', {
+                timeZone: tz, hour12: false,
+                hour: '2-digit', minute: '2-digit', second: '2-digit',
+                weekday: 'short'
+            });
+            const obj = {};
+            fmt.formatToParts(now).forEach(p => obj[p.type] = p.value);
+            return {
+                h: parseInt(obj.hour, 10),
+                m: parseInt(obj.minute, 10),
+                s: parseInt(obj.second, 10),
+                weekday: obj.weekday
+            };
+        }
+
+        function mcIsOpen(parts, openH, openM, closeH, closeM) {
+            if (['Sat', 'Sun'].includes(parts.weekday)) return false;
+            const nowMin = parts.h * 60 + parts.m;
+            return nowMin >= (openH * 60 + openM) && nowMin < (closeH * 60 + closeM);
+        }
+
+        function mcTick() {
+            const paris = mcZonedParts('Europe/Paris');
+            const ny = mcZonedParts('America/New_York');
+            const tokyo = mcZonedParts('Asia/Tokyo');
+            const india = mcZonedParts('Asia/Kolkata');
+
+            const parisOpen = mcIsOpen(paris, 9, 0, 17, 30);
+            const nyOpen = mcIsOpen(ny, 9, 30, 16, 0);
+            // TSE : 2 séances avec pause déjeuner (9h-11h30 / 12h30-15h heure de Tokyo)
+            const tokyoOpen = mcIsOpen(tokyo, 9, 0, 11, 30) || mcIsOpen(tokyo, 12, 30, 15, 0);
+            // NSE/BSE : 9h15-15h30 heure de l'Inde
+            const indiaOpen = mcIsOpen(india, 9, 15, 15, 30);
+
+            document.getElementById('mc-paris').innerHTML =
+                '🇫🇷 Paris ' + mcPad(paris.h) + ':' + mcPad(paris.m) + ':' + mcPad(paris.s) +
+                ' · Euronext ' + (parisOpen ? '🟢 Ouvert' : '🔴 Fermé') +
+                ' <span style="color:#94a3b8;">(9h–17h30)</span>';
+
+            document.getElementById('mc-ny').innerHTML =
+                '🇺🇸 New York ' + mcPad(ny.h) + ':' + mcPad(ny.m) + ':' + mcPad(ny.s) +
+                ' · NYSE/NASDAQ ' + (nyOpen ? '🟢 Ouvert' : '🔴 Fermé') +
+                ' <span style="color:#94a3b8;">(9h30–16h)</span>';
+
+            document.getElementById('mc-tokyo').innerHTML =
+                '🇯🇵 Tokyo ' + mcPad(tokyo.h) + ':' + mcPad(tokyo.m) + ':' + mcPad(tokyo.s) +
+                ' · TSE ' + (tokyoOpen ? '🟢 Ouvert' : '🔴 Fermé') +
+                ' <span style="color:#94a3b8;">(9h-11h30 / 12h30-15h)</span>';
+
+            document.getElementById('mc-india').innerHTML =
+                '🇮🇳 Mumbai ' + mcPad(india.h) + ':' + mcPad(india.m) + ':' + mcPad(india.s) +
+                ' · NSE/BSE ' + (indiaOpen ? '🟢 Ouvert' : '🔴 Fermé') +
+                ' <span style="color:#94a3b8;">(9h15–15h30)</span>';
+        }
+
+        mcTick();
+        setInterval(mcTick, 1000);
+        </script>
+        """,
+        height=40,
+    )
+
+
+afficher_barre_horaires_bourses()
 
 # --- MENU DE NAVIGATION (SIDEBAR) ---
 with st.sidebar:
