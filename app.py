@@ -5,6 +5,7 @@ import numpy as np
 import requests
 import re
 import io
+import os
 import feedparser
 from datetime import datetime, timedelta
 from textblob import TextBlob
@@ -840,6 +841,574 @@ def fetch_stock_data(ticker_str):
         return None
 
 
+# =======================================================================
+# IA — VERDICT D'INVESTISSEMENT (basé uniquement sur les données réelles
+# déjà récupérées par fetch_stock_data : aucune clé API, aucun appel réseau
+# supplémentaire. Logique transparente et déterministe, pas une boîte noire.)
+# =======================================================================
+
+def _parse_num(v):
+    """Convertit une valeur (float, ou string formatée type '12.3%' / '4.5x' / '+8.1%')
+    en float, ou None si non exploitable."""
+    if v is None:
+        return None
+    if isinstance(v, (int, float)):
+        return None if pd.isna(v) else float(v)
+    s = str(v).strip()
+    if s in ("N/A", "", "None", "nan"):
+        return None
+    s = s.replace('%', '').replace('x', '').replace('+', '')
+    try:
+        return float(s)
+    except Exception:
+        return None
+
+
+def analyser_action_ia(d):
+    """Génère un verdict d'investissement (score + explications) à partir des
+    fondamentaux réels déjà calculés par fetch_stock_data pour ce titre :
+    valorisation (juste prix de synthèse), santé financière (Piotroski),
+    rentabilité (ROE/ROA/marge), endettement, croissance (CAGR/EBITDA),
+    consensus analystes, dividende et momentum récent.
+
+    Retourne (verdict: str, couleur_hex: str, score: int, bullets: list[(icone, texte)])
+    """
+    fd = d.get('full_data', {}) or {}
+    score = 0
+    bullets = []
+
+    # --- 1. Valorisation vs "juste prix" de synthèse (moyenne BNA / FCF / analystes) ---
+    prix = d.get('Prix Actuel')
+    juste_prix = fd.get('fair_avg')
+    if prix and juste_prix and juste_prix > 0:
+        ecart = (prix - juste_prix) / juste_prix * 100
+        devise = fd.get('currency', '')
+        if ecart <= -15:
+            score += 2
+            bullets.append(("🟢", f"Fortement sous-valorisée : le cours ({clean_num(prix)}) est {abs(ecart):.0f}% sous le juste prix de synthèse estimé ({clean_num(juste_prix)} {devise})."))
+        elif ecart <= 0:
+            score += 1
+            bullets.append(("🟢", f"Sous-valorisée : {abs(ecart):.0f}% sous le juste prix de synthèse estimé ({clean_num(juste_prix)} {devise})."))
+        elif ecart <= 15:
+            bullets.append(("🟡", f"Proche du juste prix de synthèse estimé (cours {ecart:+.0f}% par rapport à {clean_num(juste_prix)} {devise})."))
+        else:
+            score -= 1
+            bullets.append(("🔴", f"Se traite {ecart:+.0f}% au-dessus du juste prix de synthèse estimé — risque de correction si la croissance attendue n'est pas au rendez-vous."))
+    else:
+        bullets.append(("⚪", "Juste prix non calculable (données de valorisation insuffisantes pour ce titre)."))
+
+    # --- 2. Santé financière (score de Piotroski, 0 à 5) ---
+    piotroski = d.get('Santé (Piotroski)', 'N/A')
+    if '/' in str(piotroski):
+        try:
+            num = int(str(piotroski).split('/')[0])
+            if num >= 4:
+                score += 1
+                bullets.append(("🟢", f"Santé financière solide (score de Piotroski {piotroski})."))
+            elif num <= 2:
+                score -= 1
+                bullets.append(("🔴", f"Santé financière fragile (score de Piotroski {piotroski}) — vigilance sur la rentabilité et le cash-flow."))
+            else:
+                bullets.append(("🟡", f"Santé financière correcte mais perfectible (score de Piotroski {piotroski})."))
+        except Exception:
+            pass
+
+    # --- 3. Rentabilité (ROE, ROA, marge nette) ---
+    roe = _parse_num(d.get('ROE'))
+    roa = _parse_num(d.get('ROA'))
+    marge = _parse_num(d.get('Marge Nette'))
+    signaux_rentab = [v for v in [roe, roa, marge] if v is not None]
+    if signaux_rentab:
+        ok = sum(1 for v, seuil in [(roe, 15), (roa, 8), (marge, 15)] if v is not None and v >= seuil)
+        if ok >= 2:
+            score += 1
+            bullets.append(("🟢", f"Bonne rentabilité (ROE {d.get('ROE')}, ROA {d.get('ROA')}, marge nette {d.get('Marge Nette')})."))
+        elif ok == 0:
+            score -= 1
+            bullets.append(("🔴", f"Rentabilité faible (ROE {d.get('ROE')}, ROA {d.get('ROA')}, marge nette {d.get('Marge Nette')})."))
+        else:
+            bullets.append(("🟡", f"Rentabilité moyenne (ROE {d.get('ROE')}, ROA {d.get('ROA')}, marge nette {d.get('Marge Nette')})."))
+
+    # --- 4. Endettement (Dette/Equity) ---
+    dette = _parse_num(d.get('Dette/Equity'))
+    if dette is not None:
+        if dette < 50:
+            score += 1
+            bullets.append(("🟢", f"Endettement maîtrisé (Dette/Equity {d.get('Dette/Equity')})."))
+        elif dette > 150:
+            score -= 1
+            bullets.append(("🔴", f"Endettement élevé (Dette/Equity {d.get('Dette/Equity')}) — sensibilité accrue à la hausse des taux."))
+        else:
+            bullets.append(("🟡", f"Endettement modéré (Dette/Equity {d.get('Dette/Equity')})."))
+
+    # --- 5. Croissance (CAGR 3 ans + croissance EBITDA) ---
+    cagr3 = _parse_num(d.get('CAGR 3 ans'))
+    ebitda_g = _parse_num(d.get('Croissance EBITDA'))
+    signaux_croissance = [v for v in [cagr3, ebitda_g] if v is not None]
+    if signaux_croissance:
+        moyenne = sum(signaux_croissance) / len(signaux_croissance)
+        if moyenne > 10:
+            score += 1
+            bullets.append(("🟢", f"Dynamique de croissance solide (CAGR 3 ans {d.get('CAGR 3 ans')}, croissance EBITDA {d.get('Croissance EBITDA')})."))
+        elif moyenne < 0:
+            score -= 1
+            bullets.append(("🔴", f"Croissance en repli (CAGR 3 ans {d.get('CAGR 3 ans')}, croissance EBITDA {d.get('Croissance EBITDA')})."))
+        else:
+            bullets.append(("🟡", f"Croissance modérée (CAGR 3 ans {d.get('CAGR 3 ans')})."))
+
+    # --- 6. Consensus des analystes ---
+    avis = d.get('Avis Analystes', 'N/A') or 'N/A'
+    if 'Achat' in avis:
+        score += 1
+        bullets.append(("🟢", f"Consensus analystes favorable ({avis}, sur {fd.get('num_analysts', 0)} opinions)."))
+    elif 'Vendre' in avis or 'Alléger' in avis:
+        score -= 1
+        bullets.append(("🔴", f"Consensus analystes défavorable ({avis})."))
+
+    # --- 7. Dividende (information, non pondéré) ---
+    rendement = d.get('Rendement %', 0) or 0
+    if rendement > 0:
+        bullets.append(("💰", f"Verse un dividende avec un rendement de {rendement}%."))
+
+    # --- 8. Momentum court terme (information, non pondéré fortement) ---
+    chg_1m = d.get('Chg 1M')
+    if chg_1m is not None and not (isinstance(chg_1m, float) and pd.isna(chg_1m)):
+        if chg_1m <= -15:
+            bullets.append(("⚠️", f"Fort repli récent ({chg_1m:+.1f}% sur 1 mois) — à recouper avec l'actualité avant toute décision."))
+        elif chg_1m >= 20:
+            bullets.append(("⚠️", f"Forte hausse récente ({chg_1m:+.1f}% sur 1 mois) — vérifier que la valorisation n'a pas trop couru par rapport aux fondamentaux."))
+
+    # --- Verdict final ---
+    if score >= 4:
+        verdict, couleur = "🟢 ACHAT FORT", "#1e7e34"
+    elif score >= 2:
+        verdict, couleur = "🟢 ACHAT", "#28a745"
+    elif score >= 0:
+        verdict, couleur = "🟡 CONSERVER / SURVEILLER", "#e8a300"
+    elif score >= -2:
+        verdict, couleur = "🟠 PRUDENCE", "#fd7e14"
+    else:
+        verdict, couleur = "🔴 RISQUE ÉLEVÉ", "#dc3545"
+
+    return verdict, couleur, score, bullets
+
+
+@st.cache_data(ttl=86400)
+def get_company_profile(ticker):
+    """Profil qualitatif de la société (description, secteur, industrie, pays,
+    effectifs, site web) — un seul appel réseau, mis en cache 24h."""
+    try:
+        info = yf.Ticker(ticker).info
+        resume = info.get('longBusinessSummary', '') or ''
+        return {
+            'resume': resume,
+            'resume_fr': safe_translate(resume) if resume else '',
+            'secteur': info.get('sector', 'N/A'),
+            'industrie': info.get('industry', 'N/A'),
+            'pays': info.get('country', 'N/A'),
+            'employes': info.get('fullTimeEmployees'),
+            'site': info.get('website', ''),
+        }
+    except Exception:
+        return {}
+
+
+# =======================================================================
+# DONNÉES COMPLÉMENTAIRES — GOOGLE FINANCE (best-effort)
+# Google Finance n'a pas d'API publique officielle : on récupère les
+# indicateurs affichés sur la page publique google.com/finance/quote/...
+# via scraping HTML. Cette page n'est pas documentée/stable dans le temps
+# (classes CSS générées, structure pouvant changer sans préavis), donc
+# cette fonction est volontairement défensive : en cas d'échec (page
+# modifiée, ticker introuvable, blocage), elle retourne un dict vide
+# plutôt que de faire planter l'app — exactement comme le repli déjà en
+# place pour les échecs Yahoo Finance plus haut dans ce fichier.
+# =======================================================================
+
+# Correspondance suffixe Yahoo Finance -> code de place boursière Google Finance.
+# Couvre les principales places européennes ciblées par l'app ; à compléter
+# au besoin si de nouveaux marchés sont ajoutés.
+_SUFFIXE_YF_VERS_BOURSE_GOOGLE = {
+    ".PA": "EPA",   # Euronext Paris
+    ".AS": "AMS",   # Euronext Amsterdam
+    ".BR": "EBR",   # Euronext Brussels
+    ".LS": "ELI",   # Euronext Lisbon
+    ".DE": "ETR",   # Deutsche Börse Xetra
+    ".MI": "BIT",   # Borsa Italiana Milan
+    ".MC": "BME",   # Bolsa de Madrid
+    ".L": "LON",    # London Stock Exchange
+    ".SW": "VTX",   # SIX Swiss Exchange
+}
+
+
+def _ticker_yahoo_vers_google(ticker):
+    """Convertit un ticker au format Yahoo Finance (ex: 'MC.PA', 'AAPL') vers le
+    format attendu par Google Finance (ex: 'MC:EPA', 'AAPL:NASDAQ'). Retourne
+    None si le suffixe de place boursière n'est pas reconnu (mieux vaut ne pas
+    interroger Google Finance que de deviner une bourse au hasard)."""
+    t = ticker.strip().upper()
+    for suffixe, bourse in _SUFFIXE_YF_VERS_BOURSE_GOOGLE.items():
+        if t.endswith(suffixe):
+            symbole = t[: -len(suffixe)]
+            return f"{symbole}:{bourse}"
+    if "." not in t:
+        # Pas de suffixe : on suppose une valeur US, en tentant NASDAQ puis NYSE.
+        return f"{t}:NASDAQ"
+    return None
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def get_google_finance_data(ticker):
+    """Récupère quelques indicateurs publiés sur la fiche Google Finance du titre
+    (best-effort, voir note ci-dessus). Retourne un dict (éventuellement vide) de
+    libellé -> valeur tels qu'affichés sur la page, sans recalcul ni interprétation."""
+    symbole_google = _ticker_yahoo_vers_google(ticker)
+    if not symbole_google:
+        return {}
+
+    candidats = [symbole_google]
+    if symbole_google.endswith(":NASDAQ"):
+        candidats.append(symbole_google.replace(":NASDAQ", ":NYSE"))
+
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36"}
+    for candidat in candidats:
+        try:
+            url = f"https://www.google.com/finance/quote/{candidat}"
+            r = requests.get(url, headers=headers, timeout=6)
+            if r.status_code != 200:
+                continue
+            soup = BeautifulSoup(r.text, "html.parser")
+
+            donnees = {}
+            # Prix actuel affiché en tête de page.
+            prix_el = soup.select_one("div.YMlKec.fxKbKc")
+            if prix_el:
+                donnees["Cours (Google Finance)"] = prix_el.get_text(strip=True)
+
+            # Bloc "A propos" : paires libellé/valeur (capitalisation, P/E, rendement, etc.)
+            for ligne in soup.select("div.gyFHrc"):
+                libelle_el = ligne.select_one("div.mfs7Fc")
+                valeur_el = ligne.select_one("div.P6K39c")
+                if libelle_el and valeur_el:
+                    libelle = libelle_el.get_text(strip=True)
+                    valeur = valeur_el.get_text(strip=True)
+                    if libelle and valeur:
+                        donnees[libelle] = valeur
+
+            if donnees:
+                return donnees
+        except Exception:
+            continue
+
+    return {}
+
+
+# =======================================================================
+# CONNEXION À UN VRAI LLM (GPT-OSS 120B, gratuit, via OpenRouter)
+# Le modèle ne reçoit QUE les signaux déjà calculés par analyser_action_ia
+# (chiffres réels) — il ne fait qu'expliquer/mettre en perspective, il ne
+# recalcule ni n'invente aucune donnée financière.
+# =======================================================================
+
+OPENROUTER_MODELE_GRATUIT = "openai/gpt-oss-120b"
+OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
+
+
+def _get_openrouter_api_key():
+    """Cherche la clé API OpenRouter dans st.secrets puis dans l'environnement.
+    Même pour le modèle gratuit, OpenRouter exige une clé (création de compte gratuite
+    sur https://openrouter.ai/keys) — seule la consommation de tokens ne coûte rien."""
+    try:
+        if "OPENROUTER_API_KEY" in st.secrets:
+            return st.secrets["OPENROUTER_API_KEY"]
+    except Exception:
+        pass
+    return os.environ.get("OPENROUTER_API_KEY")
+
+
+def _appel_openrouter(system_prompt, user_message, model=OPENROUTER_MODELE_GRATUIT):
+    """Appelle un modèle via l'API OpenRouter (compatible OpenAI) pour un échange à un seul
+    tour (system + 1 message utilisateur). Retourne le texte, None si pas de clé, ou
+    '__ERROR__:...' en cas d'échec."""
+    return _appel_openrouter_messages(
+        [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_message}],
+        model=model,
+    )
+
+
+def _appel_openrouter_messages(messages, model=OPENROUTER_MODELE_GRATUIT):
+    """Appelle un modèle via l'API OpenRouter (compatible OpenAI) avec un historique complet
+    de messages (utilisé pour le chat multi-tours). `messages` est une liste de dicts
+    {"role": "system"|"user"|"assistant", "content": str}. Retourne le texte, None si pas de
+    clé, ou '__ERROR__:...' en cas d'échec."""
+    api_key = _get_openrouter_api_key()
+    if not api_key:
+        return None
+    try:
+        r = requests.post(
+            OPENROUTER_URL,
+            headers={
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json",
+                # Recommandé par OpenRouter, sans impact fonctionnel si laissé générique :
+                "HTTP-Referer": "https://streamlit.io",
+                "X-Title": "Assistant Boursier IA",
+            },
+            json={
+                "model": model,
+                "messages": messages,
+                "max_tokens": 900,
+            },
+            timeout=30,
+        )
+        if r.status_code != 200:
+            return f"__ERROR__:HTTP {r.status_code} — {r.text[:200]}"
+        data = r.json()
+        contenu = data["choices"][0]["message"]["content"]
+        return contenu.strip() if contenu else "__ERROR__:réponse vide du modèle."
+    except Exception as e:
+        return f"__ERROR__:{e}"
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def generer_analyse_llm(ticker, nom, secteur, verdict_ia, score_ia, bullets_txt, profil_resume,
+                         news_txt=(), google_data=None):
+    """Demande à GPT-OSS-120B (gratuit, via OpenRouter) de rédiger une synthèse en langage
+    naturel à partir des signaux fondamentaux déjà calculés (bullets_txt, issus de Yahoo
+    Finance), des indicateurs complémentaires trouvés sur Google Finance (google_data,
+    best-effort) et des actualités récentes déjà collectées (news_txt, via get_quick_news).
+    Mis en cache 1h par titre pour limiter le débit. Retourne le texte, None si pas de clé
+    API, ou '__ERROR__:...' en cas d'échec de l'appel."""
+    contexte = "\n".join(f"- {b}" for b in bullets_txt)
+    contexte_news = "\n".join(f"- {n}" for n in news_txt)
+    contexte_google = "\n".join(f"- {libelle} : {valeur}" for libelle, valeur in (google_data or {}).items())
+    system_prompt = (
+        "Tu es un analyste financier pédagogue qui écrit en français pour un investisseur "
+        "particulier. On te fournit une liste de signaux fondamentaux déjà calculés à partir "
+        "de données réelles (Yahoo Finance) : valorisation, santé financière, rentabilité, "
+        "endettement, croissance, consensus analystes — éventuellement complétés par quelques "
+        "indicateurs relevés sur Google Finance, ainsi qu'une sélection des actualités les plus "
+        "récentes sur le titre. Ta tâche est de mettre ces signaux en perspective, d'expliquer "
+        "ce qu'ils signifient concrètement, de relier si pertinent l'actualité récente aux "
+        "fondamentaux (ex : une actualité négative qui confirme ou contredit un signal), de "
+        "signaler explicitement toute divergence notable entre Yahoo Finance et Google Finance "
+        "si tu en observes une, de souligner les points de vigilance et les incertitudes, et de "
+        "conclure par une synthèse équilibrée. N'invente JAMAIS de chiffre ou d'événement qui ne "
+        "t'a pas été fourni. Reste concis (4 à 6 paragraphes courts ou puces). Termine toujours "
+        "par une phrase rappelant que ceci n'est pas un conseil en investissement personnalisé."
+    )
+    user_message = (
+        f"Société : {nom} ({ticker})\n"
+        f"Secteur : {secteur}\n"
+        f"Verdict automatique (score {score_ia:+d}) : {verdict_ia}\n\n"
+        f"Signaux fondamentaux détectés (Yahoo Finance) :\n{contexte}\n\n"
+        + (f"Indicateurs complémentaires (Google Finance) :\n{contexte_google}\n\n" if contexte_google else "")
+        + (f"Activité de l'entreprise : {profil_resume}\n\n" if profil_resume else "")
+        + (f"Actualités récentes (titre, source, date) :\n{contexte_news}\n\n" if contexte_news else "")
+        + "Rédige ton analyse maintenant."
+    )
+
+    return _appel_openrouter(system_prompt, user_message, model=OPENROUTER_MODELE_GRATUIT)
+
+
+def afficher_assistant_ia_chat(d, verdict_ia, score_ia, bullets_ia):
+    """Assistant conversationnel contextuel à l'action affichée : le LLM reçoit ses
+    fondamentaux (Yahoo Finance), les indicateurs Google Finance (best-effort), son profil
+    et ses actualités récentes, et peut en plus chercher sur le web en direct (plugin
+    OpenRouter, activé par défaut — voir avertissement de coût dans le toggle)."""
+    ticker = d['Ticker']
+    nom = d.get('Nom', ticker)
+
+    if not _get_openrouter_api_key():
+        st.info(
+            "🔑 Aucune clé API OpenRouter détectée. Crée un compte gratuit sur "
+            "https://openrouter.ai/keys, puis ajoute-la dans `.streamlit/secrets.toml` : "
+            "`OPENROUTER_API_KEY = \"sk-or-...\"` (ou en variable d'environnement "
+            "`OPENROUTER_API_KEY`). Voir le README."
+        )
+        return
+
+    web_live = st.toggle(
+        "🌐 Recherche web en direct par l'IA",
+        value=True,
+        key=f"chat_web_live_{ticker}",
+        help="Plugin de recherche web d'OpenRouter : le modèle peut chercher sur internet en "
+             "plus du contexte fourni (fondamentaux, actualités). Contrairement au modèle "
+             "GPT-OSS 120B lui-même, ce plugin n'est PAS gratuit — facturé à l'usage sur ton "
+             "compte OpenRouter.",
+    )
+
+    bullets_txt_c = [f"{icon} {texte}" for icon, texte in bullets_ia]
+    profil_c = get_company_profile(ticker)
+    google_data_c = get_google_finance_data(ticker)
+    news_c = get_quick_news(ticker)[:8]
+
+    contexte_fondamentaux = "\n".join(f"- {b}" for b in bullets_txt_c) or "(aucun signal calculable)"
+    contexte_google_c = "\n".join(f"- {libelle} : {valeur}" for libelle, valeur in google_data_c.items())
+    contexte_news_c = "\n".join(
+        f"- {n['titre']} ({n['source']}, {n['date']}, sentiment {n['sentiment']})" for n in news_c
+    )
+
+    system_prompt_chat = (
+        "Tu es un assistant financier conversationnel en français, intégré à une application "
+        f"d'analyse boursière. L'utilisateur consulte actuellement : {nom} ({ticker}), secteur "
+        f"{d.get('Secteur', 'N/A')}, prix actuel {d.get('Prix Actuel', 'N/A')}, verdict "
+        f"automatique (score {score_ia:+d}) : {verdict_ia}.\n\n"
+        f"Signaux fondamentaux (Yahoo Finance) :\n{contexte_fondamentaux}\n\n"
+        + (f"Indicateurs complémentaires (Google Finance) :\n{contexte_google_c}\n\n" if contexte_google_c else "")
+        + (f"Profil de l'entreprise : {profil_c.get('resume_fr', '')}\n\n" if profil_c.get('resume_fr') else "")
+        + (f"Actualités récentes (titre, source, date, sentiment) :\n{contexte_news_c}\n\n" if contexte_news_c else "")
+        + (
+            "Tu as aussi accès à une recherche web en direct : utilise-la pour toute question qui "
+            "dépasse le contexte ci-dessus (actualité très récente, information non fournie), et "
+            "précise explicitement quand une info vient de cette recherche plutôt que du contexte "
+            "fourni.\n\n"
+            if web_live else ""
+        )
+        + "Réponds aux questions de l'utilisateur sur ce titre en t'appuyant sur ces éléments. "
+          "N'invente JAMAIS un chiffre ou un événement qui ne t'a pas été fourni (ou trouvé via "
+          "la recherche web si activée). Si une information manque, dis-le clairement plutôt que "
+          "de deviner. Reste concis et pédagogue. Si l'échange s'oriente vers une recommandation "
+          "d'achat/vente, rappelle que tu ne fournis pas de conseil en investissement personnalisé."
+    )
+
+    cle_messages = f"chat_messages_{ticker}"
+    st.session_state.setdefault(cle_messages, [])
+
+    for msg in st.session_state[cle_messages]:
+        with st.chat_message(msg["role"]):
+            st.markdown(msg["content"])
+
+    question_chat = st.chat_input(f"Pose une question sur {nom}...", key=f"chat_input_{ticker}")
+    if question_chat:
+        st.session_state[cle_messages].append({"role": "user", "content": question_chat})
+        with st.chat_message("user"):
+            st.markdown(question_chat)
+        with st.chat_message("assistant"):
+            with st.spinner("Réflexion..."):
+                messages_api = (
+                    [{"role": "system", "content": system_prompt_chat}]
+                    + st.session_state[cle_messages][-12:]  # historique récent, borné
+                )
+                modele_chat = f"{OPENROUTER_MODELE_GRATUIT}:online" if web_live else OPENROUTER_MODELE_GRATUIT
+                reponse_chat = _appel_openrouter_messages(messages_api, model=modele_chat)
+            if reponse_chat is None:
+                st.info("🔑 Clé API OpenRouter manquante ou invalide.")
+            elif reponse_chat.startswith("__ERROR__:"):
+                st.warning(f"⚠️ Erreur lors de l'appel au LLM : {reponse_chat.split(':', 1)[1]}")
+            else:
+                st.markdown(reponse_chat)
+                st.session_state[cle_messages].append({"role": "assistant", "content": reponse_chat})
+
+
+def afficher_verdict_ia(d):
+    """Affiche le bandeau 'Verdict IA' + le détail des signaux justifiant le score,
+    puis propose une analyse rédigée par un vrai LLM (GPT-OSS 120B) à partir de ces mêmes
+    signaux réels (le LLM ne voit que les chiffres déjà calculés, il n'invente rien), avec
+    à côté un assistant conversationnel sur la même action."""
+    verdict_ia, couleur_ia, score_ia, bullets_ia = analyser_action_ia(d)
+    st.markdown(
+        f"<div style='background:{couleur_ia}; color:white; padding:16px 22px; border-radius:12px; margin-bottom:12px;'>"
+        f"<div style='font-size:0.78em; opacity:0.9; font-weight:600; letter-spacing:0.5px;'>🤖 VERDICT IA — analyse automatique sur données réelles (score {score_ia:+d})</div>"
+        f"<div style='font-size:1.5em; font-weight:bold; margin-top:4px;'>{verdict_ia}</div>"
+        f"</div>",
+        unsafe_allow_html=True,
+    )
+    with st.expander("📋 Pourquoi ce verdict ? (détail des signaux)", expanded=False):
+        for icon, texte in bullets_ia:
+            st.markdown(f"{icon} {texte}")
+        st.caption(
+            "⚠️ Analyse générée automatiquement à partir des données fondamentales réelles "
+            "(Yahoo Finance). Elle synthétise des règles transparentes (valorisation, santé "
+            "financière, rentabilité, endettement, croissance, consensus analystes) mais ne "
+            "constitue pas un conseil en investissement personnalisé. Fais tes propres recherches."
+        )
+
+    # --- Analyse rédigée par IA (gauche) + Assistant conversationnel (droite) ---
+    st.markdown("")
+    col_analyse, col_chat = st.columns(2)
+
+    with col_analyse:
+        lancer_llm = st.button(
+            "🧠 Générer une analyse détaillée par IA (GPT-OSS 120B)",
+            key=f"llm_btn_{d['Ticker']}",
+            help="Un vrai modèle de langage rédige une synthèse en langage naturel à partir des "
+                 "signaux ci-dessus.",
+        )
+        if lancer_llm:
+            if not _get_openrouter_api_key():
+                st.info(
+                    "🔑 Aucune clé API OpenRouter détectée. Crée un compte gratuit sur "
+                    "https://openrouter.ai/keys, puis ajoute-la dans `.streamlit/secrets.toml` : "
+                    "`OPENROUTER_API_KEY = \"sk-or-...\"` (ou en variable d'environnement "
+                    "`OPENROUTER_API_KEY`). Le modèle GPT-OSS 120B lui-même est gratuit, seule la "
+                    "clé de compte est requise. Voir le README."
+                )
+            else:
+                profil = get_company_profile(d['Ticker'])
+                bullets_txt = tuple(f"{icon} {texte}" for icon, texte in bullets_ia)
+                news_recentes = get_quick_news(d['Ticker'])[:8]
+                news_txt = tuple(
+                    f"{n['titre']} ({n['source']}, {n['date']}, sentiment {n['sentiment']})"
+                    for n in news_recentes
+                )
+                google_data = get_google_finance_data(d['Ticker'])
+                with st.spinner("GPT-OSS 120B rédige son analyse..."):
+                    resultat = generer_analyse_llm(
+                        ticker=d['Ticker'],
+                        nom=d.get('Nom', d['Ticker']),
+                        secteur=d.get('Secteur', 'N/A'),
+                        verdict_ia=verdict_ia,
+                        score_ia=score_ia,
+                        bullets_txt=bullets_txt,
+                        profil_resume=profil.get('resume_fr', ''),
+                        news_txt=news_txt,
+                        google_data=google_data,
+                    )
+                if resultat is None:
+                    st.info("🔑 Clé API OpenRouter manquante ou invalide.")
+                elif resultat.startswith("__ERROR__:"):
+                    st.warning(f"⚠️ Erreur lors de l'appel au LLM : {resultat.split(':', 1)[1]}")
+                else:
+                    st.markdown("#### 🧠 Analyse détaillée par GPT-OSS 120B")
+                    st.markdown(resultat)
+                    st.caption("⚠️ Généré par un modèle de langage à partir des signaux fondamentaux (Yahoo Finance, Google Finance) et de l'actualité récente ci-dessus. Ne constitue pas un conseil en investissement personnalisé.")
+
+    with col_chat:
+        if st.button(
+            f"💬 Assistant IA — {d.get('Nom', d['Ticker'])}",
+            key=f"chat_toggle_btn_{d['Ticker']}",
+            help="Ouvre/ferme l'assistant conversationnel sur ce titre, affiché en pleine "
+                 "largeur ci-dessous pour faciliter la lecture.",
+        ):
+            cle_ouverture = f"chat_open_{d['Ticker']}"
+            st.session_state[cle_ouverture] = not st.session_state.get(cle_ouverture, False)
+
+    # --- Assistant conversationnel, affiché en pleine largeur quand ouvert ---
+    if st.session_state.get(f"chat_open_{d['Ticker']}", False):
+        st.divider()
+        st.markdown(f"#### 💬 Assistant IA — {d.get('Nom', d['Ticker'])}")
+        afficher_assistant_ia_chat(d, verdict_ia, score_ia, bullets_ia)
+
+
+def afficher_profil_societe(ticker):
+    """Affiche un résumé qualitatif de la société (description, secteur, pays, effectifs)."""
+    profil = get_company_profile(ticker)
+    texte = profil.get('resume_fr') or profil.get('resume')
+    if not texte and profil.get('secteur', 'N/A') == 'N/A':
+        return
+    with st.expander("🏢 Profil de la société"):
+        st.write(f"**Secteur :** {profil.get('secteur', 'N/A')}  |  **Industrie :** {profil.get('industrie', 'N/A')}")
+        ligne_pays = f"**Pays :** {profil.get('pays', 'N/A')}"
+        if profil.get('employes'):
+            ligne_pays += f"  |  **Employés :** {profil['employes']:,}".replace(',', ' ')
+        st.write(ligne_pays)
+        if profil.get('site'):
+            st.write(f"**Site web :** {profil['site']}")
+        if texte:
+            st.write(texte)
+
+
 def afficher_detail_action(d):
     """Fiche détaillée d'une action (santé financière, graphique, valorisation, actualités).
     Réutilisée depuis la vue Portefeuille et depuis la vue Indices."""
@@ -850,6 +1419,9 @@ def afficher_detail_action(d):
 
     with c1:
         st.header(f"🏢 {d['Nom']} ({d['Ticker']})")
+
+        afficher_verdict_ia(d)
+
         st.subheader("🏥 Diagnostic Santé Financière")
         grid = st.columns(5)
         for i, (label, info) in enumerate(d['p_details'].items()):
@@ -1337,6 +1909,8 @@ f"<div style='background:#f8f9fa; border:1px solid #ddd; border-radius:8px; padd
         st.write(f"**Détachement :** {d['Date Détachement']} | **Versement :** {d.get('Date Versement Dividende', 'N/A')}")
         st.write(f"**Prochains résultats :** {d.get('Prochains Résultats', 'N/A')}")
         st.write(f"**Avis :** {d['Avis Analystes']} | **Secteur :** {d['Secteur']}")
+
+        afficher_profil_societe(d['Ticker'])
 
         ticker_clean   = str(d['Ticker']).split('.')[0].upper() if d and 'Ticker' in d else "AAPL"
         nom_action_vue = d.get('Nom', ticker_clean)
