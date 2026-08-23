@@ -10,3 +10,4 @@ beautifulsoup4
 st-gsheets-connection
 deep-translator
 lxml
+pypdf

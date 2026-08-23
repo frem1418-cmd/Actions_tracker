@@ -22,6 +22,11 @@ import urllib.parse
 import logging
 from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
 import streamlit.components.v1 as components
+try:
+    from pypdf import PdfReader  # lecture du PDF de rapport de résultats uploadé par l'utilisateur
+    _PYPDF_DISPONIBLE = True
+except ImportError:
+    _PYPDF_DISPONIBLE = False
 logging.getLogger("streamlit").setLevel(logging.ERROR)
 # Les 401/"Invalid Crumb" qu'on voit dans les logs viennent de l'endpoint Yahoo
 # (bloqué/rate-limité par intermittence sur les IP "cloud" comme Streamlit Cloud) :
@@ -68,9 +73,23 @@ conn = st.connection("gsheets", type=GSheetsConnection)
 # =======================================================================
 
 @st.cache_data(ttl=900)
-def get_quick_news(ticker):
+def get_quick_news(ticker, nom=None):
     news_list = []
     t_clean = ticker.split('.')[0].strip().upper()
+
+    # Terme de recherche : on privilégie le NOM réel de la société quand il est disponible,
+    # car le code ticker seul (ex. "MC", "OR", "V", "T"...) est souvent trop court ou ambigu
+    # pour une recherche plein texte sur Google News — il ne renvoie alors que peu ou pas
+    # d'articles pertinents, et l'assistant IA se retrouve sans vraies actualités en contexte
+    # (d'où des réponses vagues). On retire les suffixes juridiques qui polluent la requête.
+    terme_requete = t_clean
+    if nom and nom.strip() and nom.strip().upper() != t_clean:
+        nom_nettoye = re.sub(
+            r'\b(S\.?A\.?|SE|PLC|N\.?V\.?|AG|INC\.?|CORP(?:ORATION)?|CO\.?|LTD\.?|LLC|GROUP|GROUPE)\b\.?',
+            '', nom, flags=re.IGNORECASE
+        ).strip(' ,.-')
+        if len(nom_nettoye) > 2:
+            terme_requete = nom_nettoye
 
     def process_general_google(url, badge_icon, default_source="Info", limit=10):
         news_list = []
@@ -102,27 +121,34 @@ def get_quick_news(ticker):
             pass
         return news_list
 
-    def fetch_google_fr(t_clean):
-        url = f"https://news.google.com/rss/search?q={t_clean}+bourse&hl=fr&gl=FR&ceid=FR:fr"
+    def fetch_google_fr(terme):
+        q = urllib.parse.quote(f"{terme} bourse")
+        url = f"https://news.google.com/rss/search?q={q}&hl=fr&gl=FR&ceid=FR:fr"
         return process_general_google(url, "🇫🇷")
 
-    def fetch_google_us(t_clean):
-        url = f"https://news.google.com/rss/search?q={t_clean}+stock+news&hl=en-US&gl=US&ceid=US:en"
+    def fetch_google_us(terme):
+        q = urllib.parse.quote(f"{terme} stock news")
+        url = f"https://news.google.com/rss/search?q={q}&hl=en-US&gl=US&ceid=US:en"
         return process_general_google(url, "🌐")
 
-    def fetch_google_agencies(t_clean):
-        url = f"https://news.google.com/rss/search?q={t_clean}+source:Bloomberg+OR+source:Reuters&hl=en-US"
+    def fetch_google_agencies(terme):
+        q = urllib.parse.quote(f"{terme} source:Bloomberg OR source:Reuters")
+        url = f"https://news.google.com/rss/search?q={q}&hl=en-US"
         return process_general_google(url, badge_icon="💎")
 
-    def fetch_google_wires(t_clean):
-        url = f"https://news.google.com/rss/search?q={t_clean}+source:PR_Newswire+OR+source:Business_Wire&hl=en-US"
+    def fetch_google_wires(terme):
+        q = urllib.parse.quote(f"{terme} source:PR_Newswire OR source:Business_Wire")
+        url = f"https://news.google.com/rss/search?q={q}&hl=en-US"
         return process_general_google(url, badge_icon="📄", limit=20)
 
-    def fetch_benzinga_fixed(t_clean):
+    def fetch_benzinga_fixed(terme):
         url = "https://www.benzinga.com/markets/feed"
         return process_general_google(url, "⚡ Benzinga", default_source="Benzinga")
 
-    def fetch_seeking(t_clean):
+    def fetch_seeking(terme):
+        # Seeking Alpha a besoin du VRAI symbole boursier dans son URL, jamais du nom de la
+        # société : on utilise volontairement t_clean (fermeture sur la variable externe) et
+        # on ignore le nom passé en argument, contrairement aux autres sources ci-dessus.
         url = f"https://seekingalpha.com/symbol/{t_clean}/feed"
         return process_general_google(url, badge_icon="[:orange[a]]", default_source="Seeking Alpha", limit=3)
 
@@ -139,7 +165,7 @@ def get_quick_news(ticker):
         ])
 
     with ThreadPoolExecutor(max_workers=len(tasks)) as executor:
-        futures = [executor.submit(task, t_clean) for task in tasks]
+        futures = [executor.submit(task, terme_requete) for task in tasks]
         for future in futures:
             try:
                 news_list.extend(future.result(timeout=10))
@@ -226,7 +252,7 @@ def news_dashboard_module(liste_tickers):
     for t in liste_tickers:
         nom_action = get_action_name(t)
         with st.expander(f"🏢 **{nom_action}** ({t})", expanded=True):
-            articles = get_quick_news(t)
+            articles = get_quick_news(t, nom_action)
             if articles:
                 for a in articles:
                     st.markdown(f"{a['badge']} | **{a['date']}** | [{a['titre']}]({a['lien']})")
@@ -1113,6 +1139,111 @@ def get_google_finance_data(ticker):
 OPENROUTER_MODELE_GRATUIT = "openai/gpt-oss-120b"
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
 
+# Liste des modèles sélectionnables par l'utilisateur (id OpenRouter -> libellé affiché).
+# Snapshot des modèles ":free" d'OpenRouter les plus pertinents pour l'analyse financière/
+# actions. À vérifier/actualiser de temps en temps sur https://openrouter.ai/models, la
+# liste des modèles gratuits tourne souvent.
+MODELES_LLM_DISPONIBLES = {
+    "openrouter/free": "🔀 Free Models Router (auto — bascule seule si saturé)",
+    "openai/gpt-oss-120b": "GPT-OSS 120B (OpenAI)",
+    "nvidia/nemotron-3-ultra-550b-a55b:free": "Nemotron 3 Ultra 550B (NVIDIA — le plus rigoureux)",
+    "nvidia/nemotron-3-super-120b-a12b:free": "Nemotron 3 Super 120B (NVIDIA)",
+    "nvidia/nemotron-3.5-lightning:free": "Nemotron 3.5 Lightning (NVIDIA — rapide)",
+    "nvidia/nemotron-nano-9b-v2:free": "Nemotron Nano 9B (NVIDIA — léger/rapide)",
+    "z-ai/glm-5.2:free": "GLM 5.2 (Z.ai — bon suivi d'instructions)",
+    "google/gemma-4-26b-a4b-it:free": "Gemma 4 26B (Google — bon en chat)",
+}
+
+
+def selecteur_modele_llm(key_suffix=""):
+    """Affiche un selectbox (modèle) + un slider (température) permettant de configurer les
+    appels OpenRouter (analyse détaillée + chat). Les choix sont mémorisés dans
+    st.session_state sous des clés globales ('modele_llm_choisi', 'temperature_llm_choisie')
+    afin de rester les mêmes pour toute l'application tant que l'utilisateur ne les change pas
+    explicitement. Retourne (modele_id, temperature)."""
+    cle_modele = "modele_llm_choisi"
+    cle_temp = "temperature_llm_choisie"
+    if cle_modele not in st.session_state:
+        st.session_state[cle_modele] = OPENROUTER_MODELE_GRATUIT
+    if cle_temp not in st.session_state:
+        st.session_state[cle_temp] = 0.2  # bas par défaut : réponses factuelles, peu créatives
+
+    st.markdown(
+        """
+        <style>
+        /* Sensibilité IA : composant discret, teinte neutre (plus de rouge), sans hack de mise
+           en page qui casse le rendu — un filtre de désaturation s'applique à tout le composant
+           quelle que soit la structure interne du widget, donc rien ne "casse" visuellement. */
+        div[data-testid="stSlider"] {
+            filter: grayscale(1) opacity(0.8);
+            transition: filter 0.15s ease;
+            padding-top: 0.15rem;
+        }
+        div[data-testid="stSlider"]:hover,
+        div[data-testid="stSlider"]:focus-within {
+            filter: grayscale(0.35) opacity(1);
+        }
+        div[data-testid="stSlider"] label p {
+            font-size: 0.8rem !important;
+            color: #888 !important;
+        }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    col_modele, col_temp = st.columns([3, 1])
+    with col_modele:
+        ids_modeles = list(MODELES_LLM_DISPONIBLES.keys())
+        valeur_actuelle = st.session_state[cle_modele]
+        index_defaut = ids_modeles.index(valeur_actuelle) if valeur_actuelle in ids_modeles else 0
+        choix_modele = st.selectbox(
+            "🧠 Modèle IA utilisé",
+            options=ids_modeles,
+            index=index_defaut,
+            format_func=lambda mid: MODELES_LLM_DISPONIBLES.get(mid, mid),
+            key=f"modele_llm_selectbox{key_suffix}",
+            help="S'applique à l'analyse rapide, l'analyse détaillée et l'assistant conversationnel. "
+                 "« Free Models Router » choisit lui-même un modèle gratuit disponible et bascule "
+                 "automatiquement en cas de saturation — pratique pour éviter de tester chaque "
+                 "modèle à la main. Les modèles nommés individuellement ont des limites de débit "
+                 "(typiquement ~20 req/min, ~200 req/jour par compte OpenRouter) : change de "
+                 "modèle si l'un d'eux est rate-limité ou répond mal.",
+        )
+        st.session_state[cle_modele] = choix_modele
+    with col_temp:
+        choix_temp = st.slider(
+            "Sensibilité IA",
+            min_value=0.0,
+            max_value=1.0,
+            value=st.session_state[cle_temp],
+            step=0.1,
+            key=f"temperature_llm_slider{key_suffix}",
+            help="Basse (0.1–0.3) = réponses factuelles et rigoureuses, recommandé pour la "
+                 "finance. Haute = réponses plus créatives/variées, au risque d'inventer des "
+                 "détails. Reste basse sauf besoin spécifique.",
+        )
+        st.session_state[cle_temp] = choix_temp
+
+    return choix_modele, choix_temp
+
+
+def afficher_erreur_llm(message_erreur):
+    """Affiche une erreur d'appel LLM de façon lisible : message clair et actionnable pour les
+    cas fréquents (429 = quota/débit du modèle gratuit épuisé côté fournisseur upstream, 401 =
+    clé invalide), détail brut replié dans un expander pour le débogage."""
+    if "429" in message_erreur:
+        st.warning(
+            "⏳ Ce modèle est temporairement saturé (trop de demandes chez le "
+            "fournisseur en ce moment). Change de modèle dans le sélecteur ci-dessus, ou "
+            "réessaie dans quelques instants."
+        )
+    elif "401" in message_erreur:
+        st.warning("🔑 Clé API OpenRouter invalide ou expirée. Vérifie-la dans tes secrets.")
+    else:
+        st.warning("⚠️ Erreur lors de l'appel au LLM. Essaie un autre modèle ou réessaie dans quelques instants.")
+    with st.expander("Détail technique de l'erreur"):
+        st.code(message_erreur)
+
 
 def _get_openrouter_api_key():
     """Cherche la clé API OpenRouter dans st.secrets puis dans l'environnement.
@@ -1126,59 +1257,126 @@ def _get_openrouter_api_key():
     return os.environ.get("OPENROUTER_API_KEY")
 
 
-def _appel_openrouter(system_prompt, user_message, model=OPENROUTER_MODELE_GRATUIT):
+def _appel_openrouter(system_prompt, user_message, model=OPENROUTER_MODELE_GRATUIT, temperature=0.2,
+                       max_tokens=2200):
     """Appelle un modèle via l'API OpenRouter (compatible OpenAI) pour un échange à un seul
     tour (system + 1 message utilisateur). Retourne le texte, None si pas de clé, ou
     '__ERROR__:...' en cas d'échec."""
     return _appel_openrouter_messages(
         [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_message}],
         model=model,
+        temperature=temperature,
+        max_tokens=max_tokens,
     )
 
 
-def _appel_openrouter_messages(messages, model=OPENROUTER_MODELE_GRATUIT):
+def _requete_openrouter(payload, api_key):
+    """Effectue l'appel HTTP brut vers OpenRouter et retourne (texte, code_http, corps_brut)."""
+    r = requests.post(
+        OPENROUTER_URL,
+        headers={
+            "Authorization": f"Bearer {api_key}",
+            "Content-Type": "application/json",
+            # Recommandé par OpenRouter, sans impact fonctionnel si laissé générique :
+            "HTTP-Referer": "https://streamlit.io",
+            "X-Title": "Assistant Boursier IA",
+        },
+        json=payload,
+        timeout=45,
+    )
+    return r
+
+
+def _appel_openrouter_messages(messages, model=OPENROUTER_MODELE_GRATUIT, web_search=False, temperature=0.2,
+                                max_tokens=2200, _relance=0):
     """Appelle un modèle via l'API OpenRouter (compatible OpenAI) avec un historique complet
     de messages (utilisé pour le chat multi-tours). `messages` est une liste de dicts
-    {"role": "system"|"user"|"assistant", "content": str}. Retourne le texte, None si pas de
-    clé, ou '__ERROR__:...' en cas d'échec."""
+    {"role": "system"|"user"|"assistant", "content": str}.
+
+    `temperature` : fixée basse par défaut (0.2) pour privilégier des réponses factuelles et
+    rigoureuses plutôt que créatives — recommandé pour de l'analyse financière (moins de dérive
+    et d'« hallucination » de chiffres).
+
+    `max_tokens` : 2200 par défaut. Certains modèles gratuits (notamment ceux avec un
+    raisonnement interne caché) consomment une partie de ce budget en « réflexion » avant même
+    de produire la réponse visible, ce qui peut couper la réponse avant la fin même avec une
+    limite généreuse. Pour compenser, si l'API indique `finish_reason == "length"` (réponse
+    coupée faute de budget), on relance automatiquement 1 à 2 appels de continuation (voir
+    `_relance`) en demandant au modèle de reprendre exactement où il s'est arrêté, puis on
+    concatène les morceaux — plutôt que de renvoyer une réponse tronquée à l'utilisateur.
+
+    `web_search` : active la recherche web en direct via le server tool moderne d'OpenRouter
+    (`tools: [{"type": "openrouter:web_search"}]`), qui remplace l'ancien plugin `plugins:
+    [{"id": "web"}]` (désormais déprécié côté OpenRouter). Ce server tool exige un modèle
+    supportant le tool-calling ; si l'appel échoue pour cette raison (400, message mentionnant
+    "tool"/"function"), on retente automatiquement avec l'ancien plugin `web`, qui fonctionne
+    quel que soit le modèle (il injecte simplement les résultats en contexte, sans tool-calling).
+
+    Retourne le texte, None si pas de clé, ou '__ERROR__:...' en cas d'échec."""
     api_key = _get_openrouter_api_key()
     if not api_key:
         return None
     try:
-        r = requests.post(
-            OPENROUTER_URL,
-            headers={
-                "Authorization": f"Bearer {api_key}",
-                "Content-Type": "application/json",
-                # Recommandé par OpenRouter, sans impact fonctionnel si laissé générique :
-                "HTTP-Referer": "https://streamlit.io",
-                "X-Title": "Assistant Boursier IA",
-            },
-            json={
-                "model": model,
-                "messages": messages,
-                "max_tokens": 900,
-            },
-            timeout=30,
-        )
+        payload = {
+            "model": model,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        }
+        if web_search:
+            payload["tools"] = [{"type": "openrouter:web_search"}]
+
+        r = _requete_openrouter(payload, api_key)
+
+        # Repli sur l'ancien plugin 'web' si le server tool moderne échoue parce que le modèle
+        # ne supporte pas le tool-calling (erreur 400 mentionnant tool/function), plutôt que de
+        # renvoyer une erreur sèche à l'utilisateur pour un modèle qui, sinon, fonctionne bien.
+        if web_search and r.status_code == 400 and re.search(r"tool|function", r.text, re.IGNORECASE):
+            payload.pop("tools", None)
+            payload["plugins"] = [{"id": "web"}]
+            r = _requete_openrouter(payload, api_key)
+
         if r.status_code != 200:
             return f"__ERROR__:HTTP {r.status_code} — {r.text[:200]}"
         data = r.json()
-        contenu = data["choices"][0]["message"]["content"]
-        return contenu.strip() if contenu else "__ERROR__:réponse vide du modèle."
+        choix = data["choices"][0]
+        contenu = choix["message"]["content"]
+        if not contenu:
+            return "__ERROR__:réponse vide du modèle."
+        contenu = contenu.strip()
+
+        # Réponse coupée faute de budget de tokens : on relance une continuation (max 2 fois)
+        # en donnant au modèle sa propre réponse partielle comme contexte, plutôt que de
+        # renvoyer un texte tronqué en plein milieu d'une phrase ou d'une section.
+        if choix.get("finish_reason") == "length" and _relance < 2:
+            messages_suite = messages + [
+                {"role": "assistant", "content": contenu},
+                {"role": "user", "content": (
+                    "Continue exactement là où tu t'es arrêté, sans répéter ce qui précède et "
+                    "sans réintroduire de préambule. Termine la réponse."
+                )},
+            ]
+            suite = _appel_openrouter_messages(
+                messages_suite, model=model, web_search=False, temperature=temperature,
+                max_tokens=max_tokens, _relance=_relance + 1,
+            )
+            if suite and not suite.startswith("__ERROR__:"):
+                contenu = contenu + "\n" + suite
+
+        return contenu
     except Exception as e:
         return f"__ERROR__:{e}"
 
 
 @st.cache_data(ttl=3600, show_spinner=False)
 def generer_analyse_llm(ticker, nom, secteur, verdict_ia, score_ia, bullets_txt, profil_resume,
-                         news_txt=(), google_data=None):
-    """Demande à GPT-OSS-120B (gratuit, via OpenRouter) de rédiger une synthèse en langage
-    naturel à partir des signaux fondamentaux déjà calculés (bullets_txt, issus de Yahoo
-    Finance), des indicateurs complémentaires trouvés sur Google Finance (google_data,
-    best-effort) et des actualités récentes déjà collectées (news_txt, via get_quick_news).
-    Mis en cache 1h par titre pour limiter le débit. Retourne le texte, None si pas de clé
-    API, ou '__ERROR__:...' en cas d'échec de l'appel."""
+                         news_txt=(), google_data=None, model=OPENROUTER_MODELE_GRATUIT, temperature=0.2):
+    """Demande à un LLM via OpenRouter (modèle choisi par l'utilisateur, gratuit par défaut) de
+    rédiger une synthèse en langage naturel à partir des signaux fondamentaux déjà calculés
+    (bullets_txt, issus de Yahoo Finance), des indicateurs complémentaires trouvés sur Google
+    Finance (google_data, best-effort) et des actualités récentes déjà collectées (news_txt,
+    via get_quick_news). Mis en cache 1h par (titre, modèle) pour limiter le débit. Retourne
+    le texte, None si pas de clé API, ou '__ERROR__:...' en cas d'échec de l'appel."""
     contexte = "\n".join(f"- {b}" for b in bullets_txt)
     contexte_news = "\n".join(f"- {n}" for n in news_txt)
     contexte_google = "\n".join(f"- {libelle} : {valeur}" for libelle, valeur in (google_data or {}).items())
@@ -1208,7 +1406,201 @@ def generer_analyse_llm(ticker, nom, secteur, verdict_ia, score_ia, bullets_txt,
         + "Rédige ton analyse maintenant."
     )
 
-    return _appel_openrouter(system_prompt, user_message, model=OPENROUTER_MODELE_GRATUIT)
+    return _appel_openrouter(system_prompt, user_message, model=model, temperature=temperature)
+
+
+def extraire_texte_rapport_uploade(fichier_uploade, max_caracteres=18000):
+    """Extrait le texte d'un rapport de résultats uploadé par l'utilisateur (PDF ou .txt),
+    pour qu'un LLM puisse l'analyser à la place/en complément des actualités. Tronqué à
+    `max_caracteres` pour rester dans un budget de tokens raisonnable (le début et la fin d'un
+    rapport — chiffres clés et perspectives — sont généralement les sections les plus denses en
+    information, donc on garde les deux extrémités plutôt que de couper net à la fin).
+    Retourne (texte, message_erreur) : l'un des deux est toujours None."""
+    if fichier_uploade is None:
+        return None, None
+    nom_fichier = fichier_uploade.name.lower()
+    try:
+        if nom_fichier.endswith(".pdf"):
+            if not _PYPDF_DISPONIBLE:
+                return None, "Lecture PDF indisponible sur ce serveur (dépendance 'pypdf' manquante — ajoute-la à requirements.txt)."
+            lecteur = PdfReader(fichier_uploade)
+            texte = "\n".join((page.extract_text() or "") for page in lecteur.pages)
+        elif nom_fichier.endswith(".txt"):
+            texte = fichier_uploade.read().decode("utf-8", errors="ignore")
+        else:
+            return None, "Format non supporté : uploade un PDF ou un fichier .txt."
+        texte = texte.strip()
+        if not texte:
+            return None, "Aucun texte exploitable trouvé dans ce fichier (PDF scanné/image sans OCR ?)."
+        if len(texte) > max_caracteres:
+            moitie = max_caracteres // 2
+            texte = (
+                texte[:moitie]
+                + "\n\n[...contenu tronqué pour respecter la limite de contexte...]\n\n"
+                + texte[-moitie:]
+            )
+        return texte, None
+    except Exception as e:
+        return None, f"Erreur lors de la lecture du fichier : {e}"
+
+
+# Bibliothèque de prompts d'« analyse détaillée » façon recherche actions professionnelle.
+# Chaque template est complété automatiquement avec le ticker, le nom et le secteur de
+# l'action sélectionnée (plus de saisie manuelle de [TICKER]/[COMPANY]).
+PROMPTS_ANALYSE_DETAILLEE = {
+    "wallstreet": {
+        "label": "1️⃣ Analyse boursière complète (style Wall Street)",
+        "template": (
+            "Fais comme si tu étais un analyste senior en recherche actions de Wall Street. "
+            "Analyse l'action {nom} ({ticker}).\n\nInclus :\n"
+            "• Modèle économique et sources de revenus\n"
+            "• Avantages concurrentiels (fossé protecteur)\n"
+            "• Tendances de l'industrie\n"
+            "• Santé financière (croissance des revenus, marges, dette)\n"
+            "• Risques clés\n"
+            "• Évaluation par rapport aux concurrents\n"
+            "• Scénarios haussier, baissier et de base\n"
+            "• Perspectives à 12–24 mois\n\n"
+            "Explique en termes simples mais avec des insights professionnels."
+        ),
+    },
+    "financiere": {
+        "label": "2️⃣ Analyse financière approfondie",
+        "template": (
+            "Analyse les dernières années de finances disponibles pour {nom} ({ticker}). "
+            "Décompose :\n"
+            "• Croissance du chiffre d'affaires\n"
+            "• Tendances du revenu net\n"
+            "• Flux de trésorerie disponible\n"
+            "• Marges bénéficiaires\n"
+            "• Niveaux d'endettement\n"
+            "• Rendement des capitaux propres\n\n"
+            "Explique si l'entreprise est financièrement solide ou en affaiblissement. Si "
+            "l'historique pluriannuel complet n'est pas présent dans les données fournies, "
+            "dis-le clairement plutôt que de l'inventer."
+        ),
+    },
+    "fosse": {
+        "label": "3️⃣ Analyse de l'avantage concurrentiel (fossé économique)",
+        "template": (
+            "Évalue le fossé économique concurrentiel de {nom} ({ticker}). Discute :\n"
+            "• Force de la marque\n"
+            "• Effets de réseau\n"
+            "• Coûts de changement\n"
+            "• Avantage en coûts\n"
+            "• Brevets ou technologie propriétaire\n\n"
+            "Compare avec les principaux concurrents du secteur ({secteur}) et évalue le "
+            "fossé sur une échelle de 1 à 10."
+        ),
+    },
+    "evaluation": {
+        "label": "4️⃣ Évaluation de l'action (comme une banque d'investissement)",
+        "template": (
+            "Effectue une analyse d'évaluation de {nom} ({ticker}), comme le ferait une "
+            "banque d'investissement. Inclus :\n"
+            "• Comparaison du ratio P/E\n"
+            "• Estimation du flux de trésorerie actualisé (DCF), en précisant les hypothèses "
+            "retenues\n"
+            "• Comparaison avec la moyenne du secteur ({secteur})\n"
+            "• Conclusion sur la sous-évaluation ou la surévaluation du titre\n\n"
+            "Appuie-toi sur les données de valorisation fournies ci-dessous et signale "
+            "clairement les limites de l'exercice si des données manquent."
+        ),
+    },
+    "risques": {
+        "label": "5️⃣ Analyse des risques",
+        "template": (
+            "Identifie les plus grands risques d'investissement dans {nom} ({ticker}). "
+            "Inclus :\n"
+            "• Risques économiques\n"
+            "• Perturbation de l'industrie\n"
+            "• Concurrence\n"
+            "• Menaces réglementaires\n"
+            "• Risques de dette ou financiers\n\n"
+            "Classe les risques du plus au moins dangereux."
+        ),
+    },
+    "croissance": {
+        "label": "6️⃣ Analyse du potentiel de croissance",
+        "template": (
+            "Analyse le potentiel de croissance future de {nom} ({ticker}). Considère :\n"
+            "• Taille du marché\n"
+            "• Taux de croissance du secteur ({secteur})\n"
+            "• Opportunités d'expansion\n"
+            "• Nouveaux produits\n"
+            "• Avantages liés à l'IA ou à la technologie\n\n"
+            "Estime la croissance potentielle sur les 5 à 10 prochaines années, en restant "
+            "prudent si les données fournies ne permettent pas une projection précise."
+        ),
+    },
+    "resultats": {
+        "label": "9️⃣ Analyse détaillée du dernier rapport de résultats",
+        "template": (
+            "Explique le dernier rapport de résultats financiers de {nom} ({ticker}). "
+            "Si le texte intégral du rapport a été fourni ci-dessous, base ton analyse "
+            "PRIORITAIREMENT dessus (c'est la source la plus fiable et la plus complète) ; "
+            "sinon, appuie-toi sur les actualités récentes fournies. Décompose :\n"
+            "• Chiffre d'affaires vs attentes\n"
+            "• Bénéfice vs attentes\n"
+            "• Indicateurs clés suivis par les investisseurs\n"
+            "• Perspectives de la direction\n"
+            "• Réaction du marché\n\n"
+            "Si une de ces informations n'apparaît ni dans le rapport fourni ni dans les "
+            "actualités, dis-le clairement plutôt que d'inventer des chiffres."
+        ),
+    },
+}
+
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def generer_analyse_detaillee_llm(type_analyse, ticker, nom, secteur, verdict_ia, score_ia, bullets_txt,
+                                   profil_resume, news_txt=(), google_data=None,
+                                   model=OPENROUTER_MODELE_GRATUIT, temperature=0.2,
+                                   texte_rapport_upload=None):
+    """Variante « analyse détaillée » de generer_analyse_llm : utilise un des prompts de
+    recherche actions professionnelle de PROMPTS_ANALYSE_DETAILLEE (adapté automatiquement au
+    ticker/nom/secteur de l'action sélectionnée), avec le même ancrage sur les données réelles
+    déjà calculées pour éviter toute invention de chiffre. `texte_rapport_upload` (optionnel) :
+    texte extrait d'un rapport de résultats uploadé par l'utilisateur (voir
+    extraire_texte_rapport_uploade) — utilisé en priorité par le type d'analyse 'resultats'.
+    Mis en cache 1h par (type, titre, modèle, rapport). Retourne le texte, None si pas de clé
+    API, ou '__ERROR__:...' en cas d'échec."""
+    contexte = "\n".join(f"- {b}" for b in bullets_txt)
+    contexte_news = "\n".join(f"- {n}" for n in news_txt)
+    contexte_google = "\n".join(f"- {libelle} : {valeur}" for libelle, valeur in (google_data or {}).items())
+    consigne = PROMPTS_ANALYSE_DETAILLEE.get(type_analyse, PROMPTS_ANALYSE_DETAILLEE["wallstreet"])
+    consigne_texte = consigne["template"].format(ticker=ticker, nom=nom, secteur=secteur)
+
+    system_prompt = (
+        "Tu es un analyste financier senior qui rédige en français une note de recherche "
+        "actions structurée et rigoureuse, pour un investisseur particulier averti. On te "
+        "fournit des signaux fondamentaux déjà calculés à partir de données réelles (Yahoo "
+        "Finance), éventuellement complétés par des indicateurs Google Finance, une sélection "
+        "d'actualités récentes, et parfois le texte intégral d'un rapport de résultats fourni "
+        "par l'utilisateur. Structure ta réponse avec les puces/sections demandées dans la "
+        "consigne. N'invente JAMAIS de chiffre, de date ou d'événement qui ne t'a pas été "
+        "fourni : si une information demandée n'est pas disponible dans les données ci-dessous, "
+        "dis-le explicitement au lieu de l'inventer. Termine toujours par une phrase rappelant "
+        "que ceci n'est pas un conseil en investissement personnalisé."
+    )
+    user_message = (
+        f"{consigne_texte}\n\n"
+        f"--- Données réelles disponibles sur {nom} ({ticker}) ---\n"
+        f"Secteur : {secteur}\n"
+        f"Verdict automatique (score {score_ia:+d}) : {verdict_ia}\n\n"
+        f"Signaux fondamentaux détectés (Yahoo Finance) :\n{contexte}\n\n"
+        + (f"Indicateurs complémentaires (Google Finance) :\n{contexte_google}\n\n" if contexte_google else "")
+        + (f"Activité de l'entreprise : {profil_resume}\n\n" if profil_resume else "")
+        + (f"Actualités récentes (titre, source, date) :\n{contexte_news}\n\n" if contexte_news else "")
+        + (
+            f"Texte intégral du rapport de résultats fourni par l'utilisateur (source "
+            f"principale, prioritaire sur les actualités ci-dessus) :\n{texte_rapport_upload}\n\n"
+            if texte_rapport_upload else ""
+        )
+        + "Rédige ton analyse maintenant, en français."
+    )
+
+    return _appel_openrouter(system_prompt, user_message, model=model, temperature=temperature, max_tokens=2400)
 
 
 def afficher_assistant_ia_chat(d, verdict_ia, score_ia, bullets_ia):
@@ -1228,20 +1620,26 @@ def afficher_assistant_ia_chat(d, verdict_ia, score_ia, bullets_ia):
         )
         return
 
+    # Le modèle et la température sont choisis une fois via le sélecteur global affiché
+    # juste au-dessus (voir afficher_verdict_ia) ; on relit simplement les valeurs mémorisées
+    # ici pour rester synchro.
+    modele_choisi = st.session_state.get("modele_llm_choisi", OPENROUTER_MODELE_GRATUIT)
+    temperature_choisie = st.session_state.get("temperature_llm_choisie", 0.2)
+    st.caption(f"🧠 Modèle actif : {MODELES_LLM_DISPONIBLES.get(modele_choisi, modele_choisi)} · Sensibilité IA : {temperature_choisie}")
+
     web_live = st.toggle(
         "🌐 Recherche web en direct par l'IA",
         value=True,
         key=f"chat_web_live_{ticker}",
         help="Plugin de recherche web d'OpenRouter : le modèle peut chercher sur internet en "
-             "plus du contexte fourni (fondamentaux, actualités). Contrairement au modèle "
-             "GPT-OSS 120B lui-même, ce plugin n'est PAS gratuit — facturé à l'usage sur ton "
-             "compte OpenRouter.",
+             "plus du contexte fourni (fondamentaux, actualités). Ce plugin n'est PAS gratuit "
+             "même avec un modèle ':free' — facturé à l'usage sur ton compte OpenRouter.",
     )
 
     bullets_txt_c = [f"{icon} {texte}" for icon, texte in bullets_ia]
     profil_c = get_company_profile(ticker)
     google_data_c = get_google_finance_data(ticker)
-    news_c = get_quick_news(ticker)[:8]
+    news_c = get_quick_news(ticker, nom)[:8]
 
     contexte_fondamentaux = "\n".join(f"- {b}" for b in bullets_txt_c) or "(aucun signal calculable)"
     contexte_google_c = "\n".join(f"- {libelle} : {valeur}" for libelle, valeur in google_data_c.items())
@@ -1269,7 +1667,14 @@ def afficher_assistant_ia_chat(d, verdict_ia, score_ia, bullets_ia):
           "N'invente JAMAIS un chiffre ou un événement qui ne t'a pas été fourni (ou trouvé via "
           "la recherche web si activée). Si une information manque, dis-le clairement plutôt que "
           "de deviner. Reste concis et pédagogue. Si l'échange s'oriente vers une recommandation "
-          "d'achat/vente, rappelle que tu ne fournis pas de conseil en investissement personnalisé."
+          "d'achat/vente, rappelle que tu ne fournis pas de conseil en investissement personnalisé.\n\n"
+          f"RÈGLE ABSOLUE : quelle que soit la question posée (même formulée de façon générale, "
+          f"vague, ou en apparence sans rapport), tu dois TOUJOURS la ramener et la répondre dans "
+          f"le contexte précis de {nom} ({ticker}). N'improvise jamais une réponse générique "
+          f"« de manuel » déconnectée de cette action et de ses données ci-dessus. Par exemple, si "
+          f"on te demande « c'est quoi le PER ? », définis la notion PUIS applique-la immédiatement "
+          f"au PER réel de {nom} tiré du contexte fourni. Si la question sort clairement du champ "
+          f"boursier/financier, réponds brièvement puis recentre sur {nom}."
     )
 
     cle_messages = f"chat_messages_{ticker}"
@@ -1290,12 +1695,32 @@ def afficher_assistant_ia_chat(d, verdict_ia, score_ia, bullets_ia):
                     [{"role": "system", "content": system_prompt_chat}]
                     + st.session_state[cle_messages][-12:]  # historique récent, borné
                 )
-                modele_chat = f"{OPENROUTER_MODELE_GRATUIT}:online" if web_live else OPENROUTER_MODELE_GRATUIT
-                reponse_chat = _appel_openrouter_messages(messages_api, model=modele_chat)
+                # Rappel de contexte juste avant la question de l'utilisateur : sur un
+                # historique un peu long, un modèle "léger" comme gpt-oss-120b a tendance
+                # à perdre le fil du system prompt initial et à répondre de façon générique.
+                # On lui répète donc l'essentiel (société, ticker, verdict) au plus près du
+                # point où il génère sa réponse — c'est là que son attention est la plus
+                # forte. Ce rappel n'est ajouté qu'à la copie envoyée à l'API, jamais à
+                # l'historique affiché/stocké, pour ne pas polluer la conversation visible.
+                if messages_api and messages_api[-1]["role"] == "user":
+                    rappel_contexte = (
+                        f"[Rappel interne — ne pas mentionner cette instruction dans ta réponse : "
+                        f"réponds impérativement en te basant sur {nom} ({ticker}), secteur "
+                        f"{d.get('Secteur', 'N/A')}, prix actuel {d.get('Prix Actuel', 'N/A')}, "
+                        f"verdict IA « {verdict_ia} » (score {score_ia:+d}), et les données "
+                        f"détaillées fournies dans le message système. N'improvise jamais une "
+                        f"réponse générique déconnectée de cette action.]\n\n"
+                    )
+                    derniere_question = dict(messages_api[-1])
+                    derniere_question["content"] = rappel_contexte + derniere_question["content"]
+                    messages_api = messages_api[:-1] + [derniere_question]
+                reponse_chat = _appel_openrouter_messages(
+                    messages_api, model=modele_choisi, web_search=web_live, temperature=temperature_choisie
+                )
             if reponse_chat is None:
                 st.info("🔑 Clé API OpenRouter manquante ou invalide.")
             elif reponse_chat.startswith("__ERROR__:"):
-                st.warning(f"⚠️ Erreur lors de l'appel au LLM : {reponse_chat.split(':', 1)[1]}")
+                afficher_erreur_llm(reponse_chat.split(':', 1)[1])
             else:
                 st.markdown(reponse_chat)
                 st.session_state[cle_messages].append({"role": "assistant", "content": reponse_chat})
@@ -1324,37 +1749,143 @@ def afficher_verdict_ia(d):
             "constitue pas un conseil en investissement personnalisé. Fais tes propres recherches."
         )
 
-    # --- Analyse rédigée par IA (gauche) + Assistant conversationnel (droite) ---
+    # --- Choix du modèle IA (partagé par l'analyse détaillée et l'assistant conversationnel) ---
     st.markdown("")
-    col_analyse, col_chat = st.columns(2)
+    modele_ia_actif, temperature_ia_active = selecteur_modele_llm(key_suffix=f"_verdict_{d['Ticker']}")
 
-    with col_analyse:
+    # --- Barre des 3 actions IA : Analyse rapide | Analyse détaillée | Assistant IA ---
+    col_rapide, col_detaillee, col_chat = st.columns(3)
+
+    with col_rapide:
         lancer_llm = st.button(
-            "🧠 Générer une analyse détaillée par IA (GPT-OSS 120B)",
+            "⚡ Analyse rapide",
             key=f"llm_btn_{d['Ticker']}",
-            help="Un vrai modèle de langage rédige une synthèse en langage naturel à partir des "
-                 "signaux ci-dessus.",
+            help="Un vrai modèle de langage rédige une synthèse courte en langage naturel à "
+                 "partir des signaux ci-dessus, avec le modèle sélectionné ci-dessus.",
+            use_container_width=True,
         )
-        if lancer_llm:
+
+    with col_detaillee:
+        if st.button(
+            "📊 Analyse détaillée",
+            key=f"detaillee_toggle_btn_{d['Ticker']}",
+            help="Ouvre/ferme le choix du type de note détaillée à générer (façon analyste "
+                 "actions professionnel), affiché en pleine largeur ci-dessous.",
+            use_container_width=True,
+        ):
+            cle_ouverture_d = f"detaillee_open_{d['Ticker']}"
+            st.session_state[cle_ouverture_d] = not st.session_state.get(cle_ouverture_d, False)
+
+    with col_chat:
+        if st.button(
+            f"💬 Assistant IA — {d.get('Nom', d['Ticker'])}",
+            key=f"chat_toggle_btn_{d['Ticker']}",
+            help="Ouvre/ferme l'assistant conversationnel sur ce titre, affiché en pleine "
+                 "largeur ci-dessous pour faciliter la lecture.",
+            use_container_width=True,
+        ):
+            cle_ouverture = f"chat_open_{d['Ticker']}"
+            st.session_state[cle_ouverture] = not st.session_state.get(cle_ouverture, False)
+
+    # --- Résultat de l'analyse rapide, pleine largeur ---
+    if lancer_llm:
+        if not _get_openrouter_api_key():
+            st.info(
+                "🔑 Aucune clé API OpenRouter détectée. Crée un compte gratuit sur "
+                "https://openrouter.ai/keys, puis ajoute-la dans `.streamlit/secrets.toml` : "
+                "`OPENROUTER_API_KEY = \"sk-or-...\"` (ou en variable d'environnement "
+                "`OPENROUTER_API_KEY`). Seule la clé de compte est requise. Voir le README."
+            )
+        else:
+            profil = get_company_profile(d['Ticker'])
+            bullets_txt = tuple(f"{icon} {texte}" for icon, texte in bullets_ia)
+            news_recentes = get_quick_news(d['Ticker'], d.get('Nom', d['Ticker']))[:8]
+            news_txt = tuple(
+                f"{n['titre']} ({n['source']}, {n['date']}, sentiment {n['sentiment']})"
+                for n in news_recentes
+            )
+            google_data = get_google_finance_data(d['Ticker'])
+            with st.spinner(f"{MODELES_LLM_DISPONIBLES.get(modele_ia_actif, modele_ia_actif)} rédige son analyse..."):
+                resultat = generer_analyse_llm(
+                    ticker=d['Ticker'],
+                    nom=d.get('Nom', d['Ticker']),
+                    secteur=d.get('Secteur', 'N/A'),
+                    verdict_ia=verdict_ia,
+                    score_ia=score_ia,
+                    bullets_txt=bullets_txt,
+                    profil_resume=profil.get('resume_fr', ''),
+                    news_txt=news_txt,
+                    google_data=google_data,
+                    model=modele_ia_actif,
+                    temperature=temperature_ia_active,
+                )
+            st.divider()
+            if resultat is None:
+                st.info("🔑 Clé API OpenRouter manquante ou invalide.")
+            elif resultat.startswith("__ERROR__:"):
+                afficher_erreur_llm(resultat.split(':', 1)[1])
+            else:
+                st.markdown(f"#### ⚡ Analyse rapide par {MODELES_LLM_DISPONIBLES.get(modele_ia_actif, modele_ia_actif)}")
+                st.markdown(resultat)
+                st.caption("⚠️ Généré par un modèle de langage à partir des signaux fondamentaux (Yahoo Finance, Google Finance) et de l'actualité récente ci-dessus. Ne constitue pas un conseil en investissement personnalisé.")
+
+    # --- Choix du type + génération de l'analyse détaillée, pleine largeur quand ouvert ---
+    if st.session_state.get(f"detaillee_open_{d['Ticker']}", False):
+        st.divider()
+        type_analyse_choisi = st.selectbox(
+            "📊 Type d'analyse détaillée",
+            options=list(PROMPTS_ANALYSE_DETAILLEE.keys()),
+            format_func=lambda k: PROMPTS_ANALYSE_DETAILLEE[k]["label"],
+            key=f"type_analyse_detaillee_{d['Ticker']}",
+            help="Choisis l'angle de la note de recherche à générer (façon analyste actions "
+                 "professionnel). Le prompt est automatiquement adapté à l'action sélectionnée.",
+        )
+
+        fichier_rapport = None
+        if type_analyse_choisi == "resultats":
+            fichier_rapport = st.file_uploader(
+                "📄 Rapport de résultats (PDF ou .txt) — optionnel mais recommandé",
+                type=["pdf", "txt"],
+                key=f"rapport_upload_{d['Ticker']}",
+                help="Charge le rapport de résultats récupéré sur internet (communiqué de "
+                     "presse, rapport trimestriel/annuel...). L'IA analysera en priorité ce "
+                     "document plutôt que les actualités génériques déjà collectées.",
+            )
+            if fichier_rapport is None:
+                st.caption(
+                    "ℹ️ Sans fichier, l'analyse se basera sur les actualités récentes déjà "
+                    "collectées pour ce titre (moins précis qu'un vrai rapport)."
+                )
+
+        lancer_llm_detaille = st.button(
+            "📊 Générer cette analyse détaillée",
+            key=f"llm_btn_detaille_{d['Ticker']}",
+            help="Génère une note de recherche structurée et plus longue, selon le type "
+                 "d'analyse choisi ci-dessus, avec le modèle sélectionné plus haut.",
+        )
+        if lancer_llm_detaille:
             if not _get_openrouter_api_key():
                 st.info(
                     "🔑 Aucune clé API OpenRouter détectée. Crée un compte gratuit sur "
                     "https://openrouter.ai/keys, puis ajoute-la dans `.streamlit/secrets.toml` : "
                     "`OPENROUTER_API_KEY = \"sk-or-...\"` (ou en variable d'environnement "
-                    "`OPENROUTER_API_KEY`). Le modèle GPT-OSS 120B lui-même est gratuit, seule la "
-                    "clé de compte est requise. Voir le README."
+                    "`OPENROUTER_API_KEY`). Seule la clé de compte est requise. Voir le README."
                 )
             else:
+                texte_rapport, erreur_rapport = extraire_texte_rapport_uploade(fichier_rapport)
+                if erreur_rapport:
+                    st.warning(f"⚠️ {erreur_rapport} L'analyse se poursuit sans le rapport.")
                 profil = get_company_profile(d['Ticker'])
                 bullets_txt = tuple(f"{icon} {texte}" for icon, texte in bullets_ia)
-                news_recentes = get_quick_news(d['Ticker'])[:8]
+                news_recentes = get_quick_news(d['Ticker'], d.get('Nom', d['Ticker']))[:8]
                 news_txt = tuple(
                     f"{n['titre']} ({n['source']}, {n['date']}, sentiment {n['sentiment']})"
                     for n in news_recentes
                 )
                 google_data = get_google_finance_data(d['Ticker'])
-                with st.spinner("GPT-OSS 120B rédige son analyse..."):
-                    resultat = generer_analyse_llm(
+                with st.spinner(f"{MODELES_LLM_DISPONIBLES.get(modele_ia_actif, modele_ia_actif)} rédige la note détaillée..."):
+                    resultat_d = generer_analyse_detaillee_llm(
+                        type_analyse=type_analyse_choisi,
                         ticker=d['Ticker'],
                         nom=d.get('Nom', d['Ticker']),
                         secteur=d.get('Secteur', 'N/A'),
@@ -1364,25 +1895,21 @@ def afficher_verdict_ia(d):
                         profil_resume=profil.get('resume_fr', ''),
                         news_txt=news_txt,
                         google_data=google_data,
+                        model=modele_ia_actif,
+                        temperature=temperature_ia_active,
+                        texte_rapport_upload=texte_rapport,
                     )
-                if resultat is None:
+                if resultat_d is None:
                     st.info("🔑 Clé API OpenRouter manquante ou invalide.")
-                elif resultat.startswith("__ERROR__:"):
-                    st.warning(f"⚠️ Erreur lors de l'appel au LLM : {resultat.split(':', 1)[1]}")
+                elif resultat_d.startswith("__ERROR__:"):
+                    afficher_erreur_llm(resultat_d.split(':', 1)[1])
                 else:
-                    st.markdown("#### 🧠 Analyse détaillée par GPT-OSS 120B")
-                    st.markdown(resultat)
+                    st.markdown(
+                        f"#### 📊 {PROMPTS_ANALYSE_DETAILLEE[type_analyse_choisi]['label']} — "
+                        f"par {MODELES_LLM_DISPONIBLES.get(modele_ia_actif, modele_ia_actif)}"
+                    )
+                    st.markdown(resultat_d)
                     st.caption("⚠️ Généré par un modèle de langage à partir des signaux fondamentaux (Yahoo Finance, Google Finance) et de l'actualité récente ci-dessus. Ne constitue pas un conseil en investissement personnalisé.")
-
-    with col_chat:
-        if st.button(
-            f"💬 Assistant IA — {d.get('Nom', d['Ticker'])}",
-            key=f"chat_toggle_btn_{d['Ticker']}",
-            help="Ouvre/ferme l'assistant conversationnel sur ce titre, affiché en pleine "
-                 "largeur ci-dessous pour faciliter la lecture.",
-        ):
-            cle_ouverture = f"chat_open_{d['Ticker']}"
-            st.session_state[cle_ouverture] = not st.session_state.get(cle_ouverture, False)
 
     # --- Assistant conversationnel, affiché en pleine largeur quand ouvert ---
     if st.session_state.get(f"chat_open_{d['Ticker']}", False):
@@ -1922,7 +2449,7 @@ f"<div style='background:#f8f9fa; border:1px solid #ddd; border-radius:8px; padd
         with col_switch:
             mode_fr = st.toggle("FR", help="Traduction automatique des titres en français", value=False)
 
-        all_news = get_quick_news(ticker_clean)
+        all_news = get_quick_news(d['Ticker'], nom_action_vue)
 
         unique_news = []
         titres_vus  = set()
