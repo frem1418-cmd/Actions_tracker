@@ -15,7 +15,7 @@ import time
 from bs4 import BeautifulSoup
 import streamlit as st
 from streamlit_gsheets import GSheetsConnection
-from deep_translator import GoogleTranslator
+from deep_translator import GoogleTranslator, MyMemoryTranslator
 from concurrent.futures import ThreadPoolExecutor as _BaseThreadPoolExecutor
 import threading
 import urllib.parse
@@ -186,14 +186,74 @@ def get_quick_news(ticker, nom=None):
     return news_list
 
 
+def _decouper_pour_mymemory(texte, taille_max=480):
+    """Découpe le texte en morceaux <= taille_max caractères sans couper une
+    phrase en deux quand c'est évitable (l'API MyMemory anonyme limite la
+    taille d'une requête à ~500 caractères)."""
+    phrases = re.split(r'(?<=[.!?])\s+', texte)
+    morceaux, courant = [], ""
+    for phrase in phrases:
+        if len(courant) + len(phrase) + 1 <= taille_max:
+            courant = f"{courant} {phrase}".strip()
+        else:
+            if courant:
+                morceaux.append(courant)
+            courant = phrase[:taille_max]
+    if courant:
+        morceaux.append(courant)
+    return morceaux
+
+
+def _traduction_invalide(resultat, texte_source):
+    # Certains moteurs ne lèvent pas d'exception quand ils échouent côté
+    # serveur : il arrive qu'ils renvoient le contenu d'une page d'erreur
+    # HTML ("Error 500...") comme si c'était une traduction valide.
+    return (
+        not resultat
+        or "Error 500" in resultat
+        or "That's an error" in resultat
+        or "Server Error" in resultat
+        or len(resultat) < len(texte_source) * 0.3
+    )
+
+
 @st.cache_data(ttl=3600)
 def safe_translate(text):
     if not text or len(text) < 5:
         return text
+
+    # 1) Moteur principal : Google Translate (via deep_translator)
     try:
-        return GoogleTranslator(source='auto', target='fr').translate(text)
-    except:
-        return text
+        resultat = GoogleTranslator(source='auto', target='fr').translate(text)
+        if not _traduction_invalide(resultat, text):
+            return resultat
+        logging.getLogger("streamlit").warning(
+            "safe_translate: GoogleTranslator a renvoyé une réponse invalide (page d'erreur ?)"
+        )
+    except Exception as e:
+        logging.getLogger("streamlit").warning(f"safe_translate: GoogleTranslator a échoué : {e}")
+
+    # 2) Repli : moteur MyMemory — API différente de celle de Google, souvent
+    # encore accessible quand l'endpoint de scraping de Google Translate est
+    # bloqué/rate-limité depuis les IP des plateformes cloud (Streamlit Cloud).
+    try:
+        morceaux = _decouper_pour_mymemory(text)
+        traductions = [
+            MyMemoryTranslator(source='en-GB', target='fr-FR').translate(m)
+            for m in morceaux
+        ]
+        resultat = " ".join(t for t in traductions if t)
+        if not _traduction_invalide(resultat, text):
+            return resultat
+        logging.getLogger("streamlit").warning(
+            "safe_translate: MyMemoryTranslator a renvoyé une réponse invalide"
+        )
+    except Exception as e:
+        logging.getLogger("streamlit").warning(f"safe_translate: MyMemoryTranslator a échoué : {e}")
+
+    # 3) Aucun des deux moteurs n'a fonctionné : on affiche le texte original
+    # (en anglais) plutôt qu'un message d'erreur.
+    return text
 
 
 @st.cache_data(ttl=3600)
@@ -272,7 +332,7 @@ def actualite_module(liste_tickers):
 
     with col_trad:
         mode_global_fr = st.toggle("🇫🇷", help="Traduction des titres en français",
-                                   value=st.session_state.get('mode_fr', True),
+                                   value=st.session_state.get('mode_fr', False),
                                    key="mode_fr")
 
     with col_ref:
