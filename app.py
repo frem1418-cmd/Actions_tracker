@@ -13,7 +13,6 @@ import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 import time
 from bs4 import BeautifulSoup
-import streamlit as st
 from streamlit_gsheets import GSheetsConnection
 from deep_translator import GoogleTranslator, MyMemoryTranslator
 from concurrent.futures import ThreadPoolExecutor as _BaseThreadPoolExecutor
@@ -21,7 +20,6 @@ import threading
 import urllib.parse
 import logging
 from streamlit.runtime.scriptrunner import add_script_run_ctx, get_script_run_ctx
-import streamlit.components.v1 as components
 try:
     from pypdf import PdfReader  # lecture du PDF de rapport de résultats uploadé par l'utilisateur
     _PYPDF_DISPONIBLE = True
@@ -4561,7 +4559,7 @@ st.markdown("""
 # =======================================================================
 
 def afficher_barre_horaires_bourses():
-    components.html(
+    st.iframe(
         """
         <div id="mc-bar" style="
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
